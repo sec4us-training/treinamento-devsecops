@@ -1,0 +1,274 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    ARTIFACTORY_HOME: /u01/artifactory
+    jfrog_url: "http://127.0.0.1:8082"           # Router/Access
+    jfrog_admin_user: "admin"
+    jfrog_admin_current_password: "password"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: Artifactory | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/artifactory.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ artifactory_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              location / {
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:8082;
+              }
+          
+          }
+
+    - name: Artifactory | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: Artifactory | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+          - { path: "{{ ARTIFACTORY_HOME }}" }
+          - { path: "{{ ARTIFACTORY_HOME }}/postgres" }
+          - { path: "{{ ARTIFACTORY_HOME }}/artifactory/etc" }         
+
+    - name: Artifactory | Creating system.yaml
+      copy:
+        dest: "{{ ARTIFACTORY_HOME }}/artifactory/etc/system.yaml"
+        content: |
+          shared:
+            database:
+              type: postgresql
+              driver: org.postgresql.Driver
+              url: "jdbc:postgresql://postgres:5432/artifactory"
+              username: "artifactory"
+              password: "ArtifactorySec4USLabP@sS"
+
+    - name: Artifactory | Creating docker-compose.yml
+      copy:
+        dest: "{{ ARTIFACTORY_HOME }}/docker-compose.yml"
+        content: |
+          services:
+
+            postgres:
+              image: postgres:15-alpine
+              container_name: jfrog-postgres
+              restart: unless-stopped
+              environment:
+                POSTGRES_DB: artifactory
+                POSTGRES_USER: artifactory
+                POSTGRES_PASSWORD: "ArtifactorySec4USLabP@sS"
+              volumes:
+                - "{{ ARTIFACTORY_HOME }}/postgres:/var/lib/postgresql/data"
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U artifactory -d artifactory"]
+                interval: 10s
+                timeout: 5s
+                retries: 30
+
+            artifactory:
+              image: releases-docker.jfrog.io/jfrog/artifactory-oss:latest
+              container_name: jfrog-artifactory
+              restart: unless-stopped
+
+              ports:
+                - "8081:8081"   # Artifactory UI / API
+                - "8082:8082"   # (opcional, alguns repos usam)
+
+              volumes:
+                - {{ ARTIFACTORY_HOME }}/artifactory:/var/opt/jfrog/artifactory
+
+              environment:
+                - TZ=America/Sao_Paulo
+                - JF_SHARED_NODE_IP=0.0.0.0
+                - JF_ROUTER_ENTRYPOINTS_EXTERNALPORT=8082
+                - JF_SYSTEM_YAML=/var/opt/jfrog/artifactory/var/etc/system.yaml
+
+              ulimits:
+                nofile:
+                  soft: 65536
+                  hard: 65536
+
+
+    - name: Artifactory | Start service
+      shell: |
+        cd {{ ARTIFACTORY_HOME }}
+        docker compose up -d
+
+    - name: Artifactory | Wait for JFrog container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jfrog-artifactory
+      register: jfrog_running
+      retries: 60
+      delay: 10
+      until: jfrog_running.stdout == "true"
+      changed_when: false
+
+    - name: Artifactory | Wait for docker to be ready
+      ansible.builtin.command: docker exec jfrog-artifactory bash -lc "test -d /var/opt/jfrog"
+      register: jfrog_status
+      retries: 10
+      delay: 15
+      until: jfrog_status.rc == 0
+      changed_when: true
+
+    - name: Artifactory | Adjust permitions
+      shell: |
+        docker exec --user root jfrog-artifactory bash -lc "chown artifactory:artifactory /var/opt/jfrog/artifactory/* -R"
+
+    - name: Artifactory | Wait for docker to be ready 2
+      shell: |
+        docker exec jfrog-artifactory bash -lc "test -d \${JF_PRODUCT_HOME}/var/etc/security"
+      register: jfrog_status
+      retries: 10
+      delay: 15
+      until: jfrog_status.rc == 0
+      changed_when: true
+
+    - name: Artifactory | Create master.key if missing
+      shell: |
+        docker exec jfrog-artifactory bash -lc "test -f \${JF_PRODUCT_HOME}/var/etc/security/master.key || openssl rand -hex 16 > \${JF_PRODUCT_HOME}/var/etc/security/master.key"
+      
+    - name: Artifactory | Create join.key if missing
+      shell: |
+        docker exec jfrog-artifactory bash -lc "test -f \${JF_PRODUCT_HOME}/var/etc/security/join.key || openssl rand -hex 16 > \${JF_PRODUCT_HOME}/var/etc/security/join.key"
+
+    - name: Artifactory | Wait for Artifactory port 8081
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8081
+        delay: 10
+        timeout: 300
+
+    - name: Artifactory | Wait for JFrog Artifactory to be ready
+      ansible.builtin.uri:
+        url: "https://{{ artifactory_host }}/artifactory/api/system/ping"
+        method: GET
+        validate_certs: false
+        return_content: yes
+        status_code: 200
+      register: jfrog_ping
+      retries: 60
+      delay: 10
+      until: jfrog_ping.content == "OK"
+
+    - name: Artifactory | Create admin access token (via Artifactory token API)
+      ansible.builtin.uri:
+        url: "https://{{ artifactory_host }}/artifactory/api/security/token"
+        method: POST
+        validate_certs: false
+        user: "{{ jfrog_admin_user }}"
+        password: "{{ jfrog_admin_current_password }}"
+        force_basic_auth: true
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        body_format: form-urlencoded
+        body:
+          username: "{{ jfrog_admin_user }}"
+          scope: "member-of-groups:admin"
+          expires_in: 3600
+        return_content: true
+        status_code: 200
+      register: token_resp
+      no_log: true
+
+    - name: Artifactory | Extract access token
+      ansible.builtin.set_fact:
+        jfrog_access_token: "{{ (token_resp.json.access_token | default('')) }}"
+      no_log: true
+
+    - name: Artifactory | Fail if token was not returned
+      ansible.builtin.fail:
+        msg: "JFrog did not return access_token. Check jfrog_url/credentials."
+      when: jfrog_access_token | length == 0
+
+    #- name: Artifactory | Generating admin password
+    #  set_fact:
+    #    jfrog_new_admin_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+
+    #- name: Artifactory | Check if repo exists
+    #  ansible.builtin.uri:
+    #    url: "https://{{ artifactory_host }}/artifactory/api/repositories/{{ repo_key }}"
+    #    method: GET
+    #    headers:
+    #      Authorization: "Bearer {{ jfrog_access_token }}"
+    #    status_code:
+    #      - 200
+    #      - 404
+    #  register: repo_check
+
+    #- name: Create Generic local repository
+    #  ansible.builtin.uri:
+    #    url: "https://{{ artifactory_host }}/artifactory/api/repositories/{{ repo_key }}"
+    #    method: PUT
+    #    headers:
+    #      Authorization: "Bearer {{ jfrog_access_token }}"
+    #      Content-Type: "application/json"
+    #    body_format: json
+    #    body:
+    #      rclass: local
+    #      packageType: generic
+    #      description: "Repo genérico para arquivos (bins, zips, installers, etc.)"
+    #      repoLayoutRef: "simple-default"
+    #      handleReleases: true
+    #      handleSnapshots: true
+    #      suppressPomConsistencyChecks: true
+    #      xrayIndex: false
+    #    status_code:
+    #      - 200
+    #      - 201
+    #  register: create_repo
+    #  when: repo_check.status == 404
+
+
+    - name: Artifactory |  Save credentials file
+      copy:
+        dest: "/root/artifactory_creds.txt"
+        content: |
+          Jfrog {{ jfrog_admin_user }} password: {{ jfrog_admin_current_password }}
+
+    - name: Jenkins | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/artifactory/admin"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            url: "https://{{ artifactory_host }}"
+            username: "{{ jfrog_admin_user }}"
+            password: "{{ jfrog_admin_current_password }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+

@@ -1,0 +1,11 @@
+default_username: "ubuntu"
+default_password: "sec4ussecops"
+user_text: ""
+local_username: secops
+vault_host: vault.labs.sec4us.com.br
+gitlab_host: gitlab.labs.sec4us.com.br
+artifactory_host: artifactory.labs.sec4us.com.br
+jenkins_host: jenkins.labs.sec4us.com.br
+
+jfrog_repo_key: "sec4us"
+vault_home: /u01/vault

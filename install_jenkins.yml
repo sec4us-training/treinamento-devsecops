@@ -1,0 +1,345 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    JENKINS_HOME: /u01/jenkins
+    jenkins_plugins:
+      - git
+      - workflow-aggregator
+      - credentials
+      - matrix-auth
+      - configuration-as-code
+      - docker-workflow
+      - build-timeout
+      - credentials-binding
+      - timestamper
+      - ws-cleanup
+      - gradle
+      - workflow-aggregator
+      - github-branch-source
+      - pipeline-github-lib
+      - pipeline-graph-view
+      - ssh-slaves
+      - matrix-auth
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: Jenkins | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/jenkins.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ jenkins_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              location / {
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:8080;
+              }
+          
+          }
+
+    - name: Jenkins | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: Jenkins | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+          - { path: "{{ JENKINS_HOME }}" }    
+
+    - name: Jenkins | Creating docker-compose.yml
+      copy:
+        dest: "{{ JENKINS_HOME }}/docker-compose.yml"
+        content: |
+          services:
+            jenkins:
+              image: jenkins/jenkins:lts-jdk21
+              container_name: jenkins
+              restart: unless-stopped
+
+              # Permite rodar builds que usam docker no host via /var/run/docker.sock
+              user: "0:0"
+
+              ports:
+                - "8080:8080"   # UI
+                - "50000:50000" # JNLP agents
+
+              environment:
+                - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+                # Opcional: ajuste memória se precisar
+                - JAVA_OPTS=-Xms512m -Xmx2048m
+
+              volumes:
+                # Dados persistentes do Jenkins
+                - {{JENKINS_HOME}}:/var/jenkins_home
+
+                # Acesso ao Docker do host (Docker-outside-of-Docker)
+                - /var/run/docker.sock:/var/run/docker.sock
+
+                # (Opcional) timezone
+                - /etc/localtime:/etc/localtime:ro
+
+              # Healthcheck simples na UI
+              healthcheck:
+                test: ["CMD-SHELL", "curl -fsS http://localhost:8080/login >/dev/null || exit 1"]
+                interval: 30s
+                timeout: 10s
+                retries: 10
+
+    - name: Jenkins | Start service
+      shell: |
+        cd {{ JENKINS_HOME }}
+        docker compose up -d
+
+    - name: Jenkins | Wait for container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jfrog-artifactory
+      register: jenkins_running
+      retries: 60
+      delay: 10
+      until: jenkins_running.stdout == "true"
+      changed_when: false
+
+    - name: Jenkins | Wait for port 8080
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8080
+        delay: 10
+        timeout: 300
+
+    - name: Jenkins | Wait for Jenkins to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:8080/login"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: jenkins_check
+      retries: 60
+      delay: 10
+      until: jenkins_check.status == 200
+
+    - name: Jenkins | Wait for admin password
+      shell: |
+        docker exec jenkins bash -lc "test -f /var/jenkins_home/secrets/initialAdminPassword"
+      register: jenkins_status
+      retries: 10
+      delay: 15
+      until: jenkins_status.rc == 0
+      changed_when: true
+
+    - name: Jenkins | Read initialAdminPassword from Jenkins container
+      command: >
+        docker exec jenkins bash -lc
+        "cat /var/jenkins_home/secrets/initialAdminPassword"
+      register: jenkins_password_raw
+      changed_when: false
+
+    - name: Jenkins | Store password in variable
+      set_fact:
+        jenkins_initial_admin_password: "{{ jenkins_password_raw.stdout }}"
+
+    - name: Jenkins | Generating admin password
+      set_fact:
+        jenkins_admin_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+
+    - name: Jenkins | Get crumb (CSRF token)
+      ansible.builtin.uri:
+        url: "http://localhost:8080/crumbIssuer/api/json"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_initial_admin_password }}"
+        force_basic_auth: yes
+        return_content: yes
+        status_code: 200
+      register: crumb_json
+
+    - name: Jenkins | Build CSRF header
+      set_fact:
+        jenkins_crumb_header: >-
+          {{
+            {
+              crumb_json.json.crumbRequestField:
+              crumb_json.json.crumb
+            }
+          }}
+
+    - name: Jenkins | Create Jenkins admin user
+      uri:
+        url: http://localhost:8080/setupWizard/createAdminUser
+        method: POST
+        user: admin
+        password: "{{ jenkins_initial_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body_format: form-urlencoded
+        body: >-
+          {{
+            {
+              'username': 'admin',
+              'password1': jenkins_admin_password,
+              'password2': jenkins_admin_password,
+              'fullname': 'Jenkins Admin',
+              'email': 'admin@' ~ jenkins_host,
+              (crumb_json.json.crumbRequestField): crumb_json.json.crumb
+            }
+          }}
+        status_code: 200
+
+    - name: Jenkins | Get crumb (CSRF token)
+      ansible.builtin.uri:
+        url: "http://localhost:8080/crumbIssuer/api/json"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: 
+          Cookie: "{{ crumb_json.cookies_string }}"
+        return_content: yes
+        status_code: 200
+      register: crumb_json
+
+    - name: Jenkins | Build CSRF header
+      set_fact:
+        jenkins_crumb_header: >-
+          {{
+            {
+              crumb_json.json.crumbRequestField:
+              crumb_json.json.crumb
+            }
+          }}
+
+    - name: Jenkins | Install Jenkins plugins
+      uri:
+        url: "http://localhost:8080/pluginManager/installPlugins"
+        method: POST
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/json'}) }}"
+        body_format: json
+        body: >-
+          {{
+            {
+              'dynamicLoad': true,
+              'plugins': jenkins_plugins,
+              (crumb_json.json.crumbRequestField): crumb_json.json.crumb
+            }
+          }}
+        status_code: [200, 302]
+        follow_redirects: all
+
+    - name: Jenkins | Wait for plugin installation to finish
+      ansible.builtin.uri:
+        url: "http://localhost:8080/updateCenter/api/json?tree=jobs[id,type,status[_class]]"
+        method: GET
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
+        return_content: yes
+        status_code: 200
+      register: uc
+      until: >
+        (
+          uc.json.jobs | default([]) |
+          selectattr('status', 'defined') |
+          selectattr('status._class', 'defined') |
+          rejectattr('status._class', 'search', 'Success$') |
+          list | length
+        ) == 0
+      retries: 60
+      delay: 10
+
+    - name: Jenkins | Set Jenkins URL
+      uri:
+        url: http://localhost:8080/setupWizard/configureInstance
+        method: POST
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body_format: form-urlencoded
+        body: >-
+          {{
+            {
+              'rootUrl': 'https://' ~ jenkins_host,
+              (crumb_json.json.crumbRequestField): crumb_json.json.crumb
+            }
+          }}
+        status_code: 200
+
+
+    - name: Jenkins | Restart Jenkins safely
+      uri:
+        url: http://localhost:8080/safeRestart
+        method: POST
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
+        status_code: 302
+
+    - name: Jenkins | Wait for Jenkins to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:8080/login"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: jenkins_check
+      retries: 60
+      delay: 10
+      until: jenkins_check.status == 200
+
+    - name: Jenkins | admin password
+      debug:
+        msg: "Jenkins admin password is {{ jenkins_admin_password }}"
+
+    - name: Jenkins |  Save credentials file
+      copy:
+        dest: "/root/jenkins_creds.txt"
+        content: |
+          Jenkins admin password: {{ jenkins_admin_password }}
+
+    - name: Jenkins | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/jenkins/admin"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            url: "https://{{ jenkins_host }}"
+            username: "admin"
+            password: "{{ jenkins_admin_password }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+

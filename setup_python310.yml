@@ -1,0 +1,48 @@
+- name: Python 3.10 | Adding signing key
+  apt_repository:
+    repo: "ppa:deadsnakes/ppa"
+    state: present
+    update_cache: yes
+
+- name: Python 3.10 | Updating apt cache
+  apt:
+    update_cache: yes
+
+- name: Python 3.10 | Installing
+  apt:
+    pkg:
+      - python3.10
+      - python3-pip
+      - python3.10-dev
+      - python3.10-venv
+      - python3-setuptools 
+    state: latest
+
+- name: Python 3.10 | Install Other packages
+  ignore_errors: yes
+  ansible.builtin.pip:
+    executable: pip3
+    extra_args: --break-system-packages
+    name:
+      - distorm3
+      - yara
+      - pycrypto
+      - pillow
+      - openpyxl
+      - ujson
+      - pytz
+      - ipython
+      - capstone
+      - cffi
+      - pyopenssl
+      - hvac
+
+- name: Install pipx
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+    update_cache: yes
+
+- name: Ensure pipx path
+  ansible.builtin.command: pipx ensurepath
+  changed_when: false

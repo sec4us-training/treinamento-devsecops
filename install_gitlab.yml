@@ -1,0 +1,197 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    GITLAB_HOME: /u01/gitlab
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: GitLab | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/gitlab.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ gitlab_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              location / {
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:8180;
+              }
+          
+              # Protege o GITLab caso não defina a senha do Admin na instalacao
+              location /users/password/edit {
+                  return 403;
+              }
+
+          }
+
+    - name: GitLab | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: GitLab | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0775
+      with_items:
+          - { path: "{{ GITLAB_HOME }}/config" }
+          - { path: "{{ GITLAB_HOME }}/logs" }
+          - { path: "{{ GITLAB_HOME }}/data" }
+    
+    - name: GitLab | Creating docker-compose.yml
+      copy:
+        dest: "{{ GITLAB_HOME }}/docker-compose.yml"
+        content: |
+          services:
+            gitlab:
+              image: 'gitlab/gitlab-ce:latest'
+              container_name: gitlab
+              restart: always
+              hostname: '{{ gitlab_host }}'
+              environment:
+                GITLAB_OMNIBUS_CONFIG: |
+                  external_url 'https://{{ gitlab_host }}'
+                  gitlab_rails['gitlab_shell_ssh_port'] = 22
+                  nginx['enable'] = false
+                  gitlab_workhorse['listen_network'] = "tcp"
+                  gitlab_workhorse['listen_addr'] = "0.0.0.0:8180"
+
+              ports:
+                - '8180:8180'
+                - '2222:22'
+
+              volumes:
+                - '{{ GITLAB_HOME }}/config:/etc/gitlab'
+                - '{{ GITLAB_HOME }}/logs:/var/log/gitlab'
+                - '{{ GITLAB_HOME }}/data:/var/opt/gitlab'
+
+              shm_size: '256m'
+
+    - name: GitLab | Start gitlab
+      shell: |
+        cd {{ GITLAB_HOME }}
+        docker compose up -d
+
+    - name: GitLab | Wait for gitlab container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' gitlab
+      register: gitlab_running
+      retries: 30
+      delay: 5
+      until: gitlab_running.stdout.strip() == "true"
+      changed_when: false
+    
+    - name: GitLab | Wait for internal services
+      ansible.builtin.command: docker exec gitlab gitlab-ctl status
+      register: gitlab_status
+      retries: 40
+      delay: 15
+      until: >
+        gitlab_status.stdout is search("run: postgresql") and
+        gitlab_status.stdout is search("run: sshd") and
+        gitlab_status.stdout is search("run: gitaly")
+      changed_when: false
+
+    - name: GitLab | Wait for API to be ready
+      ansible.builtin.command: docker exec gitlab bash -lc "curl -s http://127.0.0.1:8180/-/health || true"
+      register: gitlab_status
+      retries: 40
+      delay: 15
+      until: >
+        gitlab_status.stdout is search("GitLab OK")
+      changed_when: false
+
+    - name: GitLab | Reconfigure
+      ansible.builtin.command: docker exec gitlab gitlab-ctl reconfigure
+      register: reconfigure_out
+      retries: 10
+      delay: 15
+      until: reconfigure_out.rc == 0
+      changed_when: true
+
+    - name: GitLab | Generating admin password
+      set_fact:
+        gitlab_root_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+
+    - name: GitLab | Generating root access token
+      set_fact:
+        gitlab_root_token: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=40) }}"
+
+    - name: GitLab | Change admin password via rails runner
+      become: true
+      ansible.builtin.command: >
+        docker exec gitlab gitlab-rails runner
+        "u = User.where(username: 'root').first;
+         u.password_automatically_set=false; 
+         u.password = '{{ gitlab_root_password }}'; 
+         u.password_confirmation = '{{ gitlab_root_password }}'; 
+         u.save!"
+      changed_when: true
+
+    - name: GitLab | Create admin token via rails runner
+      ansible.builtin.command: >
+        docker exec gitlab gitlab-rails runner
+        "u = User.where(username: 'root').first;
+         t = PersonalAccessToken.new(user: u, name: 'root token', scopes: ['api','sudo'], expires_at: 1.year.from_now); 
+         t.set_token('{{gitlab_root_token}}'); 
+         t.save!
+         puts t.token"
+      register: token_out
+      changed_when: true
+
+    - name: GitLab | root password
+      debug:
+        msg: "Gitlab root password is {{ gitlab_root_password }}"
+
+    - name: GitLab | root access token
+      debug:
+        msg: "Gitlab root access token is {{ gitlab_root_token }}"
+
+    - name: GitLab | Save credentials file
+      copy:
+        dest: "/root/gitlab_creds.txt"
+        content: |
+          Gitlab root password: {{ gitlab_root_password }}
+          Gitlab root access token: {{ gitlab_root_token }}
+
+    - name: GitLab | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/gitlab/admin"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            url: "https://{{ gitlab_host }}"
+            username: "root"
+            password: "{{ gitlab_root_password }}"
+            personal_token: "{{ gitlab_root_token }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+

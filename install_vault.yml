@@ -1,0 +1,360 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+
+    - name: Vault | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/vault.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ vault_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              location / {
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:8200;
+              }
+          
+          }
+
+    - name: Vault | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: Vault | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+          - { path: "{{ vault_home }}" } 
+          - { path: "{{ vault_home }}/config" } 
+          - { path: "{{ vault_home }}/data" } 
+          - { path: "{{ vault_home }}/logs" }    
+
+    - name: Vault | Creating vault.hcl
+      copy:
+        dest: "{{ vault_home }}/config/vault.hcl"
+        content: |
+          ui = true
+
+          storage "file" {
+            path = "/vault/data"
+          }
+
+          listener "tcp" {
+            address     = "0.0.0.0:8200"
+            tls_disable = 1
+          }
+
+          disable_mlock = true
+
+    - name: Vault | Creating unseal.sh
+      copy:
+        dest: "{{ vault_home }}/unseal.sh"
+        mode: 0777
+        content: |
+          #!/bin/sh
+          set -eu
+
+          VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
+          INIT_JSON="${INIT_JSON:-/vault/init.json}"
+          THRESHOLD="${THRESHOLD:-1}"
+
+          echo "[entrypoint] starting vault server..."
+          vault server -config=/vault/config/vault.hcl &
+          VAULT_PID="$!"
+
+          # Espera o Vault subir
+          echo "[entrypoint] waiting vault API..."
+          i=0
+          until vault status >/dev/null 2>&1; do
+            i=$((i+1))
+            if [ "$i" -gt 60 ]; then
+              echo "[entrypoint] vault did not become ready in time"
+              kill "$VAULT_PID" 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Só tenta unseal se init.json existir
+          if [ -f "$INIT_JSON" ]; then
+            echo "[entrypoint] found $INIT_JSON"
+
+            # Checa se está sealed
+            vault status -format=json 2>/dev/null | grep '"sealed":[[:space:]]*true'
+            if [ "$?" -eq "0" ]; then
+              echo "[entrypoint] vault is sealed, unsealing..."
+
+              # Extrai N chaves do init.json (sem depender de jq)
+              # Assumindo que init.json tem "unseal_keys_b64": ["k1","k2",...]
+              KEYS="$(sed -n 's/.*"unseal_keys_b64":[[:space:]]*\[\(.*\)\].*/\1/p' "$INIT_JSON" | tr -d ' ' | tr ',' '\n' | tr -d '"')"
+
+              n=0
+              echo "$KEYS" | while IFS= read -r key; do
+                [ -z "$key" ] && continue
+                n=$((n+1))
+                echo "[entrypoint] unseal key ${n}/${THRESHOLD}"
+                vault operator unseal "$key" >/dev/null 2>&1 || true
+                [ "$n" -ge "$THRESHOLD" ] && break
+              done
+
+              echo "[entrypoint] unseal attempt done."
+            else
+              echo "[entrypoint] vault already unsealed."
+            fi
+          else
+            echo "[entrypoint] init.json not found, skipping unseal."
+          fi
+
+          # Mantém o vault server no foreground
+          wait "$VAULT_PID"
+
+    - name: Vault | Creating docker-compose.yml
+      copy:
+        dest: "{{ vault_home }}/docker-compose.yml"
+        content: |
+          services:
+            vault:
+              image: hashicorp/vault:1.21
+              container_name: vault
+              restart: unless-stopped
+
+              ports:
+                - "8200:8200"
+
+              environment:
+                VAULT_ADDR: "http://0.0.0.0:8200"
+                VAULT_API_ADDR: "http://0.0.0.0:8200"
+
+              cap_add:
+                - IPC_LOCK
+
+              volumes:
+                - {{ vault_home }}:/vault/
+
+              #command: vault server -config=/vault/config/vault.hcl
+              entrypoint: ["/vault/unseal.sh"]
+
+    - name: Vault | Start service
+      shell: |
+        cd {{ vault_home }}
+        docker compose up -d
+
+    - name: Vault | Wait for container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' vault
+      register: vault_running
+      retries: 60
+      delay: 10
+      until: vault_running.stdout == "true"
+      changed_when: false
+
+    - name: Vault | Wait for port 8200
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8200
+        delay: 10
+        timeout: 300
+
+    - name: Vault | Get current status
+      ansible.builtin.shell: |
+        docker exec vault vault status -format=json 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: vault_status_cmd
+      changed_when: false
+
+    - name: Parse do JSON do status (se vier JSON)
+      ansible.builtin.set_fact:
+        vault_status: "{{ vault_status_cmd.stdout | from_json }}"
+      when: vault_status_cmd.stdout is search('^{')
+      changed_when: false
+
+    - name: Vault | Definir flag de inicialização (fallback para false se status não veio)
+      ansible.builtin.set_fact:
+        vault_initialized: "{{ (vault_status.initialized | default(false)) | bool }}"
+        vault_sealed: "{{ (vault_status.sealed | default(true)) | bool }}"
+      changed_when: false
+
+    - name: Mostrar status detectado
+      ansible.builtin.debug:
+        msg:
+          stdout_len: "{{ vault_status_cmd.stdout | length }}"
+          initialized: "{{ vault_initialized }}"
+          sealed: "{{ vault_sealed }}"
+      changed_when: false
+
+    - name: Validar existência do init.json
+      ansible.builtin.stat:
+        path: "{{ vault_home }}/init.json"
+      register: init_stat
+      changed_when: false
+
+    - name: Executar vault operator init se não inicializado (gera e salva init.json)
+      ansible.builtin.shell: |
+        docker exec vault vault operator init \
+          -format=json \
+          -key-shares=1 \
+          -key-threshold=1 | tee "{{ vault_home }}/init.json" >/dev/null
+      args:
+        executable: /bin/bash
+      when: vault_initialized == false and (init_stat.stat.exists == false or init_stat.stat.blocks == 0)
+      no_log: true
+
+    - name: Confirmar status após init
+      ansible.builtin.shell: |
+        docker exec vault vault status -format=json 2>/dev/null || true
+      register: vault_status_cmd_after
+      changed_when: false
+
+    - name: Parse do JSON do status (se vier JSON)
+      ansible.builtin.set_fact:
+        vault_status_after: "{{ vault_status_cmd_after.stdout | from_json }}"
+      when: vault_status_cmd_after.stdout is search('^{')
+      changed_when: false
+
+    - name: Vault | Definir flag de inicialização (fallback para false se status não veio)
+      ansible.builtin.set_fact:
+        vault_initialized: "{{ (vault_status_after.initialized | default(false)) | bool }}"
+        vault_sealed: "{{ (vault_status_after.sealed | default(true)) | bool }}"
+      changed_when: false
+
+    - name: Validar existência do init.json
+      ansible.builtin.stat:
+        path: "{{ vault_home }}/init.json"
+      register: init_stat
+      changed_when: false
+
+    - name: Falhar se Vault está sealed mas init.json não existe
+      ansible.builtin.fail:
+        msg: "Vault está sealed, mas {{ vault_home }}/init.json não existe no host. Não dá para unseal automaticamente."
+      when: vault_sealed and (init_stat.stat.exists == false or init_stat.stat.blocks == 0)
+
+    - name: Ler init.json (lado Ansible)
+      ansible.builtin.slurp:
+        src: "{{ vault_home }}/init.json"
+      register: init_slurp
+      when: init_stat.stat.exists and init_stat.stat.blocks > 0
+      no_log: true
+
+    - name: Parse do init.json (lado Ansible)
+      ansible.builtin.set_fact:
+        init_data: "{{ (init_slurp.content | b64decode) | from_json }}"
+      when: init_stat.stat.exists and init_stat.stat.blocks > 0
+      no_log: true
+
+    - name: Unseal Vault (usar as primeiras N unseal_keys_b64)
+      ansible.builtin.shell: |
+        docker exec vault vault operator unseal '{{ init_data.unseal_keys_b64[item] }}' >/dev/null
+      loop: "{{ range(0, init_data.unseal_threshold) | list }}"
+      when:
+        - vault_initialized
+        - vault_sealed
+        - init_stat.stat.exists
+        - init_stat.stat.blocks > 0
+      no_log: true
+
+    - name: Vault | root token
+      debug:
+        msg: "Vault root token is {{ init_data.root_token }}"
+
+    - name: Vault | Save credentials file
+      copy:
+        dest: "/root/vault_creds.txt"
+        content: |
+          Vault root token: {{ init_data.root_token }}
+
+    - name: Vault | Save credentials file (to next ansible steps)
+      copy:
+        dest: "{{ vault_home }}/ansible_vault.key"
+        content: |
+          {{ init_data.root_token }}
+
+    - include_tasks: 'vault_token.yml'
+
+    - name: Vault | Enable KV secrets engine
+      ansible.builtin.shell: |
+        docker exec \
+          -e VAULT_ADDR=http://127.0.0.1:8200 \
+          -e VAULT_TOKEN='{{ vault_token }}' \
+          vault sh -lc 'vault secrets enable -path=secret kv || true'
+      changed_when: false
+
+    - name: Vault | Create a test key (KV v2 via HTTP API)
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/devsecops/test_secret"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            username: "sec4us"
+            password: "MinhaSenhaSuperS3cret@"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+
+    - name: Vault | Read test key (KV v2)
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/devsecops/test_secret"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: 200
+      register: read_secret
+      no_log: true
+
+    - name: Debug
+      ansible.builtin.debug:
+        msg:
+          username: "User: {{ read_secret.json.data.data.username }}, Pass: {{ read_secret.json.data.data.password }}"
+
+    - name: Read SSH key from controller
+      ansible.builtin.set_fact:
+        ssh_key_pem: "{{ lookup('file', playbook_dir ~ '/ssh_key.pem') }}"
+      no_log: true
+
+    - name: Vault | Store server SSH key
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/devops-server/ssh"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            username: "root"
+            private_key: "{{ ssh_key_pem }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+

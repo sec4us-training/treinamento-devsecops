@@ -1,0 +1,93 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  vars_files:
+    - vars.yml
+
+  tasks:
+    
+    - include_tasks: 'user_details.yml'
+
+    - name: Tools | Install pyccat
+      ansible.builtin.pip:
+        executable: pip3
+        extra_args: --break-system-packages
+        name:
+          - pyccat>=0.1.8
+
+    - name: Tools | Install filecrawler
+      ansible.builtin.pip:
+        executable: pip3
+        extra_args: --break-system-packages
+        name:
+          - filecrawler>=0.1.8
+
+    - name: Tools | Filecrawler libs
+      shell: |
+        filecrawler -h
+      ignore_errors: yes
+
+    - name: Tools | GitLeaks
+      ansible.builtin.shell: |
+        cd /tmp/
+        url=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases | jq -r '[ .[] | {id: .id, tag_name: .tag_name, assets: [ .assets[] | select(.name|match("linux-amd64.tar.gz$")) | {name: .name, browser_download_url: .browser_download_url} ]} | select(.assets != []) ] | sort_by(.id) | reverse | first(.[].assets[]) | .browser_download_url')
+        rm -rf gitleaks-latest.tar.gz
+        wget -nv -O gitleaks-latest.tar.gz "$url"
+        tar -xzf gitleaks-latest.tar.gz
+        mv gitleaks /usr/sbin/
+        chmod +x /usr/sbin/gitleaks
+        exit 0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: Tools | Epyon
+      ansible.builtin.shell: |
+        cd /tmp/
+        url=$(curl -s https://api.github.com/repos/pasknel/epyon/releases | jq -r '[ .[] | {id: .id, tag_name: .tag_name, assets: [ .assets[] | select(.name|match("linux-amd64.tar.gz$")) | {name: .name, browser_download_url: .browser_download_url} ]} | select(.assets != []) ] | sort_by(.id) | reverse | first(.[].assets[]) | .browser_download_url')
+        rm -rf epyon-latest.tar.gz
+        wget -nv -O epyon-latest.tar.gz "$url"
+        tar -xzf epyon-latest.tar.gz
+        mv epyon /usr/sbin/
+        chmod +x /usr/sbin/epyon
+        curl -LO https://raw.githubusercontent.com/pasknel/epyon/refs/heads/main/config-example.yaml
+        cp config-example.yaml /root/config.yaml
+        cp config-example.yaml /home/{{ local_username }}/config.yaml
+        chown {{ local_username }}:{{ local_username }} /home/{{ local_username }}/config.yaml
+        exit 0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: Tools | Shinkiro
+      shell: |
+        cd /usr/src/
+        git clone https://github.com/pasknel/shinkiro.git
+        cd shinkiro
+        go get ./...
+        go build
+        cp shinkiro /usr/sbin/shinkiro
+        chmod +x /usr/sbin/shinkiro
+        exit 0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: Tools | EnumDNS
+      shell: |
+        cd /tmp
+        url=$(curl -s https://api.github.com/repos/helviojunior/enumdns/releases | jq -r '[ .[] | {id: .id, tag_name: .tag_name, assets: [ .assets[] | select(.name|match("linux-amd64.tar.gz$")) | {name: .name, browser_download_url: .browser_download_url} ]} | select(.assets != []) ] | sort_by(.id) | reverse | first(.[].assets[]) | .browser_download_url')
+        rm -rf enumdns-latest.tar.gz
+        wget -nv -O enumdns-latest.tar.gz "$url"
+        tar -xzf enumdns-latest.tar.gz
+        mv enumdns /usr/local/sbin/
+        chmod +x /usr/local/sbin/enumdns
+        exit 0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+
+
