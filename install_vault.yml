@@ -94,11 +94,12 @@
           # Espera o Vault subir
           echo "[entrypoint] waiting vault API..."
           i=0
-          until vault status >/dev/null 2>&1; do
+          until (vault status 2>&1 | grep -q -i 'initialized[[:space:]]*true'); do
             i=$((i+1))
             if [ "$i" -gt 60 ]; then
               echo "[entrypoint] vault did not become ready in time"
-              kill "$VAULT_PID" 2>/dev/null || true
+              # Mantém o vault server no foreground
+              wait "$VAULT_PID"
               exit 1
             fi
             sleep 1
@@ -109,7 +110,7 @@
             echo "[entrypoint] found $INIT_JSON"
 
             # Checa se está sealed
-            vault status -format=json 2>/dev/null | grep '"sealed":[[:space:]]*true'
+            s=$(vault status -format=json 2>/dev/null | grep -q -i '"sealed":[[:space:]]*true')
             if [ "$?" -eq "0" ]; then
               echo "[entrypoint] vault is sealed, unsealing..."
 
@@ -143,7 +144,7 @@
         content: |
           services:
             vault:
-              image: hashicorp/vault:1.21
+              image: hashicorp/vault:1.20
               container_name: vault
               restart: unless-stopped
 
@@ -185,7 +186,9 @@
 
     - name: Vault | Get current status
       ansible.builtin.shell: |
-        docker exec vault vault status -format=json 2>/dev/null || true
+        docker exec \
+          -e VAULT_ADDR=http://127.0.0.1:8200 \
+          vault vault status -format=json 2>/dev/null || true
       args:
         executable: /bin/bash
       register: vault_status_cmd
@@ -219,7 +222,9 @@
 
     - name: Executar vault operator init se não inicializado (gera e salva init.json)
       ansible.builtin.shell: |
-        docker exec vault vault operator init \
+        docker exec \
+          -e VAULT_ADDR=http://127.0.0.1:8200 \
+          vault vault operator init \
           -format=json \
           -key-shares=1 \
           -key-threshold=1 | tee "{{ vault_home }}/init.json" >/dev/null
@@ -230,7 +235,9 @@
 
     - name: Confirmar status após init
       ansible.builtin.shell: |
-        docker exec vault vault status -format=json 2>/dev/null || true
+        docker exec \
+          -e VAULT_ADDR=http://127.0.0.1:8200 \
+          vault vault status -format=json 2>/dev/null || true
       register: vault_status_cmd_after
       changed_when: false
 
@@ -257,29 +264,29 @@
         msg: "Vault está sealed, mas {{ vault_home }}/init.json não existe no host. Não dá para unseal automaticamente."
       when: vault_sealed and (init_stat.stat.exists == false or init_stat.stat.blocks == 0)
 
-    - name: Ler init.json (lado Ansible)
+    - name: Ler init.json
       ansible.builtin.slurp:
         src: "{{ vault_home }}/init.json"
       register: init_slurp
       when: init_stat.stat.exists and init_stat.stat.blocks > 0
       no_log: true
 
-    - name: Parse do init.json (lado Ansible)
+    - name: Parse do init.json
       ansible.builtin.set_fact:
         init_data: "{{ (init_slurp.content | b64decode) | from_json }}"
       when: init_stat.stat.exists and init_stat.stat.blocks > 0
-      no_log: true
 
     - name: Unseal Vault (usar as primeiras N unseal_keys_b64)
       ansible.builtin.shell: |
-        docker exec vault vault operator unseal '{{ init_data.unseal_keys_b64[item] }}' >/dev/null
+        docker exec \
+          -e VAULT_ADDR=http://127.0.0.1:8200 \
+          vault vault operator unseal '{{ init_data.unseal_keys_b64[item] }}'
       loop: "{{ range(0, init_data.unseal_threshold) | list }}"
       when:
         - vault_initialized
         - vault_sealed
         - init_stat.stat.exists
         - init_stat.stat.blocks > 0
-      no_log: true
 
     - name: Vault | root token
       debug:
@@ -304,7 +311,7 @@
         docker exec \
           -e VAULT_ADDR=http://127.0.0.1:8200 \
           -e VAULT_TOKEN='{{ vault_token }}' \
-          vault sh -lc 'vault secrets enable -path=secret kv || true'
+          vault sh -lc 'vault secrets enable -path=secret kv'
       changed_when: false
 
     - name: Vault | Create a test key (KV v2 via HTTP API)

@@ -148,6 +148,7 @@ if [ "W$ansible_path" = "W" ]; then
   echo "ansible-galaxy collection install ansible.windows"
   echo "ansible-galaxy collection install community.windows"
   echo "ansible-galaxy collection install community.hashi_vault"
+  echo "ansible-galaxy collection install community.general"
   echo " "
   info
   exit 1
@@ -164,6 +165,7 @@ else
     ansible-galaxy collection install -U ansible.windows
     ansible-galaxy collection install -U community.windows
     ansible-galaxy collection install -U community.hashi_vault
+    ansible-galaxy collection install -U community.general
     echo "ansible_deps" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
