@@ -3,7 +3,7 @@
 
 usage()
 {
-    echo "usage: sudo deploy.sh"
+    echo "usage: wget --no-cache -q -O- https://raw.githubusercontent.com/sec4us-training/treinamento-devsecops/main/deploy.sh | sudo bash"
 }
 
 info()
@@ -117,7 +117,7 @@ if [ ! -f "$SSH_FILE_PUB" ]; then
 fi
 
 echo -e "\n${OK} Realizando o download dos scripts"
-#git clone https://github.com/sec4us-training/web-api-linux.git /tmp/devsecops
+git clone https://github.com/sec4us-training/web-api-linux.git /tmp/devsecops
 pushd /tmp/devsecops
 
 cp -f $SSH_FILE ssh_key.pem

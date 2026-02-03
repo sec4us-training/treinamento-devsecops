@@ -23,6 +23,7 @@
       - ssh-slaves
       - matrix-auth
       - jfrog
+      - hashicorp-vault
 
   vars_files:
     - vars.yml
@@ -296,6 +297,23 @@
           }}
         status_code: 200
 
+    - name: Jenkins | Create API token
+      uri:
+        url: http://localhost:8080/user/admin/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken
+        method: POST
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body:
+          newTokenName: "Admin token"
+        status_code: 200
+      register: token_resp
+
+    - name: Jenkins | Set fact with generated token (tokenValue)
+      ansible.builtin.set_fact:
+        jenkins_api_token: "{{ token_resp.json.data.tokenValue }}"
+      no_log: true
 
     - name: Jenkins | Restart Jenkins safely
       uri:
@@ -330,7 +348,47 @@
             url: "https://{{ jenkins_host }}"
             username: "admin"
             password: "{{ jenkins_admin_password }}"
+            toke: "{{ jenkins_api_token }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
+
+    - include_tasks: 'vault_token_gitlab.yml'
+
+    - name: Jenkins | Set fact 
+      ansible.builtin.set_fact:
+        json_body: |
+          {
+            "": "0",
+            "credentials": {
+              "scope": "GLOBAL",
+              "id": "gitlab-gitscm",
+              "username": "oauth2",
+              "password": "{{ gitlab_admin_token }}",
+              "description": "GitLab PAT for GitSCM",
+              "$class": "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
+            }
+          }
+      no_log: true
+
+    - include_tasks: 'jenkins_create_cred.yml'
+
+    - name: Jenkins | Set fact 
+      ansible.builtin.set_fact:
+        json_body: |
+          {
+            "": "0",
+            "credentials": {
+              "scope": "GLOBAL",
+              "id": "vault",
+              "secret": "{{ vault_token }}",
+              "description": "Vault token",
+              "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"
+            }
+          }
+      no_log: true
+
+    - include_tasks: 'jenkins_create_cred.yml'
+
+    
 

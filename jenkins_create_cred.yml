@@ -1,0 +1,50 @@
+---
+- name: Jenkins | Get crumb (CSRF token)
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
+    method: GET
+    user: "{{ jenkins_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+    return_content: yes
+    status_code: 200
+  register: crumb_json
+
+- name: Jenkins | Build CSRF header
+  set_fact:
+    jenkins_crumb_header: >-
+      {{
+        {
+          crumb_json.json.crumbRequestField:
+          crumb_json.json.crumb
+        }
+      }}
+
+- name: Jenkins | Create gitlab in global domain
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/credentials/store/system/domain/_/createCredentials"
+    method: POST
+    user: "{{ jenkins_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+    body_format: form-urlencoded
+    body:
+      json: "{{ json_body }}"
+    status_code: [200, 201, 204, 409]
+    validate_certs: false
+  register: create_cred
+  no_log: true
+
+- name: Jenkins | Explain result
+  ansible.builtin.debug:
+    msg: >-
+      Credencial '{{ cred_id }}' criada com sucesso.
+  when: create_cred.status in [200, 201, 204]
+
+- name: Jenkins | Credential already exists
+  ansible.builtin.debug:
+    msg: >-
+      Credencial '{{ cred_id }}' já existe (HTTP 409). Nada a fazer.
+  when: create_cred.status == 409

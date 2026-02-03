@@ -15,6 +15,21 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
+    - name: GitLab | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/bank"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            db_user: "bank"
+            db_pass: "123456"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+
     - name: GitLab | Check if path exists
       stat:
         path: /tmp/bank_git/
@@ -195,6 +210,71 @@
           port = 3306
           charset = utf8
           autocommit = False
+
+    - name: Creatting Jenkins file
+      copy:
+        dest: "/tmp/bank_git/config.ini"
+        force: yes
+        content: |
+          node {
+              stage('Checkout') {
+                  checkout([
+                      $class: 'GitSCM',
+                      branches: [[name: '*/main']],
+                      userRemoteConfigs: [[
+                          url: 'https://{{gitlab_host}}:sec4us/bank.git',
+                          credentialsId: 'gitlab-gitscm'
+                      ]]
+                  ])
+              }
+
+              stage('Gradle + SonarQube') {
+                  withSonarQubeEnv('sonarqube') {
+                      sh './gradlew clean sonarqube'
+                  }
+              }
+
+              stage('Quality Gate') {
+                  timeout(time: 10, unit: 'MINUTES') {
+                      def qg = waitForQualityGate()
+                      if (qg.status != 'OK') {
+                          error "Quality Gate failed: ${qg.status}"
+                      }
+                  }
+              }
+
+              stage('Build com segredos do Vault') {
+                steps {
+                  script {
+                    def secrets = [
+                      [
+                        path: 'kv/secret/bank',
+                        engineVersion: 2,
+                        secretValues: [
+                          [envVar: 'DB_USER', vaultKey: 'db_user'],
+                          [envVar: 'DB_PASS', vaultKey: 'db_pass']
+                        ]
+                      ]
+                    ]
+
+                    // Usa config global do Vault (url etc.) e autentica via credencial do Jenkins
+                    withVault(
+                      vaultSecrets: secrets,
+                      vaultCredentialId: 'vault',
+                      vaultUrl: 'https://{{vault_host}}:8200'
+                    ) {
+                      sh '''
+                        set +x
+                        echo "Rodando build..."
+                        
+                      '''
+                    }
+                  }
+                }
+              }
+            }
+          }
+
 
     - name: GitLab | Commit
       shell: |
