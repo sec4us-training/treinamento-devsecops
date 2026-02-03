@@ -1,0 +1,74 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    WEB_HOME: /u01/www
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+
+    - name: GitLab | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/www.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ web01_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root {{ WEB_HOME }};
+              index index.html index.htm;
+
+              location / {
+                  autoindex on;
+                  autoindex_exact_size off;
+                  autoindex_localtime on;
+                  try_files $uri $uri/ =404;
+              }
+
+          }
+
+    - name: Web01 | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: Web01 | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0775
+      with_items:
+          - { path: "{{ WEB_HOME }}" }
+          - { path: "{{ WEB_HOME }}/.git" }
+    
+    - name: Web01 | Get .git path
+      ansible.builtin.set_fact:
+        git_dir_path: "{{ playbook_dir }}/.git"
+
+    - name: Web01 | Sync files
+      shell: |
+        rsync -a {{ git_dir_path }}/* {{ WEB_HOME }}/.git
+
+    - name: Web01 | Getting NGINX user conf
+      shell: |
+        cat /etc/nginx/nginx.conf | grep -E '\buser\b' | sed 's/user//g;s/\;//g' | tr -d ' ' > /tmp/nginxuser.txt
+
+    - name: Web01 | Adjusting permitions
+      shell: |
+        nginx_user=$(cat /tmp/nginxuser.txt | tr -d '\n')
+        echo "Nginx User: $nginx_user"
+        chown $nginx_user:$nginx_user -R "{{ WEB_HOME }}"
+
+

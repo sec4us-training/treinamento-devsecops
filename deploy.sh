@@ -272,7 +272,7 @@ fi
 echo -e "\n${OK} Executando passo 5 - install_gitlab.yml"
 grep "step5_gitlab" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 4...${W}"
+    echo -e "${DEBUG} ${C}Pulando passo 5...${W}"
 else
     ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_gitlab.yml
     if [ "$?" != "0" ]; then
@@ -288,7 +288,7 @@ fi
 echo -e "\n${OK} Executando passo 6 - install_jfrog.yml"
 grep "step6_jfrog" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 5...${W}"
+    echo -e "${DEBUG} ${C}Pulando passo 6...${W}"
 else
     ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jfrog.yml
     if [ "$?" != "0" ]; then
@@ -304,7 +304,7 @@ fi
 echo -e "\n${OK} Executando passo 7 - install_jenkins.yml"
 grep "step7_jenkins" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 6...${W}"
+    echo -e "${DEBUG} ${C}Pulando passo 7...${W}"
 else
     ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jenkins.yml
     if [ "$?" != "0" ]; then
@@ -313,6 +313,22 @@ else
         exit 1
     fi
     echo "step7_jenkins" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+# Step 8 - Web01
+echo -e "\n${OK} Executando passo 8 - install_web01.yml"
+grep "step8_web01" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 8...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_web01.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible Web01${W}\n"
+        info
+        exit 1
+    fi
+    echo "step8_web01" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 

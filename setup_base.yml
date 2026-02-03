@@ -22,6 +22,7 @@
     - name: Base | Set hosts
       shell: |
         echo "127.0.0.1    $(hostname)" >> /etc/hosts
+        echo "127.0.0.1    {{ web01_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ vault_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ gitlab_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ artifactory_host }}" >> /etc/hosts

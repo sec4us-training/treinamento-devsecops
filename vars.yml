@@ -6,6 +6,7 @@ vault_host: vault.labs.sec4us.com.br
 gitlab_host: gitlab.labs.sec4us.com.br
 artifactory_host: artifactory.labs.sec4us.com.br
 jenkins_host: jenkins.labs.sec4us.com.br
+web01_host: www.labs.sec4us.com.br
 
 jfrog_repo_key: "sec4us"
 vault_home: /u01/vault
