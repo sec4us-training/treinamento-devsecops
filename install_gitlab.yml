@@ -150,7 +150,7 @@
 
     - name: GitLab | Generating root access token
       ansible.builtin.command: >
-        python -c 'import base64; obf=bytes([61,61,81,75,113,111,87,79,47,52,72,76,112,53,104,71,74,56,103,98,53,56,84,67]); key=0x5A; print(bytes([b^key for b in base64.b64decode(obf[::-1])]).decode())'
+        python3 -c 'import base64; obf=bytes([61,61,81,75,113,111,87,79,47,52,72,76,112,53,104,71,74,56,103,98,53,56,84,67]); key=0x5A; print(bytes([b^key for b in base64.b64decode(obf[::-1])]).decode())'
       register: gitlab_root_token_out
       retries: 10
       delay: 15
@@ -172,8 +172,8 @@
          t.set_token('{{gitlab_root_token}}'); 
          t.save!
          puts t.token"
-      register: token_out
       changed_when: true
+      no_log: true
 
     - name: GitLab | Store credentials
       ansible.builtin.uri:
