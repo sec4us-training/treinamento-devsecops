@@ -4,6 +4,8 @@
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
     GITLAB_HOME: /u01/gitlab
+    gitlab_external_url: 
+    gitlab_api_version: 
 
   vars_files:
     - vars.yml
@@ -145,7 +147,7 @@
 
     - name: GitLab | Parse do output
       ansible.builtin.set_fact:
-        gitlab_root_password: "{{ gitlab_root_adm_out.stdout.trim() }}"
+        gitlab_root_password: "{{ gitlab_root_adm_out.stdout | trim }}"
       changed_when: false
       no_log: true
 
@@ -160,21 +162,9 @@
          u.save!"
       changed_when: true
 
-    - name: GitLab | Generating root access token
-      ansible.builtin.command: >
-        python3 -c 'import base64; obf=bytes([61,48,65,76,81,119,120,75,98,73,67,97,90,52,71,67,116,112,119,73,105,70,120,78,118,66,65,70,51,53,121,79,113,89,84,80]); key=0x5A; print(bytes([b^key for b in base64.b64decode(obf[::-1])]).decode())'
-      register: gitlab_root_token_out
-      retries: 10
-      delay: 15
-      until: gitlab_root_token_out.rc == 0
-      changed_when: true
-      no_log: true
-
-    - name: GitLab | Parse do output
-      ansible.builtin.set_fact:
-        gitlab_root_token: "{{ gitlab_root_token_out.stdout.trim() }}"
-      changed_when: false
-      no_log: true
+    - name: GitLab | Generating admin access token
+      set_fact:
+        gitlab_root_token: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
 
     - name: GitLab | Create admin token via rails runner
       ansible.builtin.command: >

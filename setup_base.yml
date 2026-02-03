@@ -22,6 +22,7 @@
     - name: Base | Set hosts
       shell: |
         echo "127.0.0.1    $(hostname)" >> /etc/hosts
+        echo "127.0.0.1    {{ sonar_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ web01_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ vault_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ gitlab_host }}" >> /etc/hosts
@@ -338,13 +339,13 @@
           include /etc/squid/conf.d/*
 
           #Auth
-          auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwords
-          auth_param basic realm DevSecOps
+          #auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwords
+          #auth_param basic realm DevSecOps
 
           # ACL
-          acl authenticated proxy_auth REQUIRED
-          acl webapi dstdomain .sec4us.com.br
-          http_access allow authenticated webapi
+          #acl authenticated proxy_auth REQUIRED
+          acl devsecops dstdomain .sec4us.com.br
+          http_access allow devsecops
           http_access deny all
 
           http_port 48284

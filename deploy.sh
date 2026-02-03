@@ -257,7 +257,7 @@ grep "step4_vault" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
     echo -e "${DEBUG} ${C}Pulando passo 4...${W}"
 else
-    ansible-playbook -vvv -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_vault.yml
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_vault.yml
     if [ "$?" != "0" ]; then
         echo -e "${ERROR} ${O} Erro executando ansible Artifactory${W}\n"
         info
@@ -329,6 +329,55 @@ else
         exit 1
     fi
     echo "step8_web01" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+# Step 9 - Sonarqube
+echo -e "\n${OK} Executando passo 9- install_sonar.yml"
+grep "step9_sonar" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 9...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_sonar.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible Sonarqube${W}\n"
+        info
+        exit 1
+    fi
+    echo "step9_sonar" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+
+# Step 10 - Create Helvio GitLab
+echo -e "\n${OK} Executando passo 10 gitlab_helvio.yml"
+grep "gitlab_helvio" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 10...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_helvio.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible gitlab_helvio${W}\n"
+        info
+        exit 1
+    fi
+    echo "gitlab_helvio" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+# Step 11 - Create Repo BANK
+echo -e "\n${OK} Executando passo 11 gitlab_bank.yml"
+grep "gitlab_bank" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 10...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_bank.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible gitlab_bank${W}\n"
+        info
+        exit 1
+    fi
+    echo "gitlab_bank" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 

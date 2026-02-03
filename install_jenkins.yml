@@ -22,6 +22,7 @@
       - pipeline-graph-view
       - ssh-slaves
       - matrix-auth
+      - jfrog
 
   vars_files:
     - vars.yml
@@ -316,16 +317,6 @@
       retries: 60
       delay: 10
       until: jenkins_check.status == 200
-
-    - name: Jenkins | admin password
-      debug:
-        msg: "Jenkins admin password is {{ jenkins_admin_password }}"
-
-    - name: Jenkins |  Save credentials file
-      copy:
-        dest: "/root/jenkins_creds.txt"
-        content: |
-          Jenkins admin password: {{ jenkins_admin_password }}
 
     - name: Jenkins | Store credentials
       ansible.builtin.uri:

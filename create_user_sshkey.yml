@@ -1,0 +1,62 @@
+---
+- name: "List existing users"
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/users"
+    method: "GET"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    validate_certs: false
+    return_content: true
+  register: user_list_output
+
+- name: "Check if user is already exists"
+  set_fact:
+    user_exists: "{{ gitlab_username in (user_list_output.json |\
+      map(attribute='username') | list) }}"
+
+- name: "Get user ID"
+  set_fact:
+    gitlab_user_id: "{{ item.id }}"
+  loop: "{{ user_list_output.json }}"
+  when:
+    - user_exists
+    - item.username == gitlab_username
+  failed_when: 
+    - not user_exists
+
+- name: "User debug"
+  debug:
+    msg: "User id is {{ gitlab_user_id }}"
+
+- name: "List existing users keys"
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/users/\
+      {{ gitlab_user_id }}/keys"
+    method: "GET"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    validate_certs: false
+    return_content: true
+  register: keys_list_output
+
+- name: "Check if ssh key is already exists in keys"
+  set_fact:
+    key_exists: "{{ gitlab_ssh_key in (keys_list_output.json |\
+      map(attribute='key') | list) }}"
+
+- name: "Add key to user"
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/users/\
+          {{ gitlab_user_id }}/keys"
+    method: "POST"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    body: 
+      id: "{{ gitlab_user_id }}"
+      key: "{{ gitlab_ssh_key }}" 
+      title: "SSH Key" 
+    body_format: json
+    validate_certs: false
+    return_content: true
+    status_code: 201
+  when: not key_exists

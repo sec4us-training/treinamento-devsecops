@@ -1,0 +1,98 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    GITLAB_HOME: /u01/gitlab
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: Vault | Read gitlab token
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/gitlab/admin"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: 200
+      register: read_secret
+      no_log: true
+
+    - name: Base | Generate helvio's SSH key
+      user:
+        name: "helvio"
+        generate_ssh_key: yes
+        ssh_key_type: rsa
+        ssh_key_bits: 4096
+        ssh_key_file: "{{ GITLAB_HOME }}/id_rsa_helvio"
+        force: no
+
+    - name: Get SSH public key
+      slurp:
+        src: "{{ GITLAB_HOME }}/id_rsa_helvio.pub"
+      register: remote_ssk_pub_encoded
+    
+    - name: "Set data to API1"
+      set_fact:
+        gitlab_admin_token: "{{ read_secret.json.data.data.personal_token }}"
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "bank"
+        gitlab_username: "helvio"
+        gitlab_name: "Helvio Junior"
+        gitlab_master_email: "helvio@labs.sec4us.com.br"
+        gitlab_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+        gitlab_ssh_key: "{{remote_ssk_pub_encoded.content | b64decode}}"
+      no_log: true
+
+    - include_tasks: "create_group.yml"
+    - include_tasks: "create_user.yml"
+    - include_tasks: "create_user_sshkey.yml"
+    - include_tasks: "create_project.yml"
+
+    - name: GitLab | Generating user access token
+      ansible.builtin.command: >
+        python3 -c 'import base64; obf=bytes([61,48,65,76,81,119,120,75,98,73,67,97,90,52,71,67,116,112,119,73,105,70,120,78,118,66,65,70,51,53,121,79,113,89,84,80]); key=0x5A; print(bytes([b^key for b in base64.b64decode(obf[::-1])]).decode())'
+      register: gitlab_token_out
+      retries: 10
+      delay: 15
+      until: gitlab_token_out.rc == 0
+      changed_when: true
+      no_log: true
+
+    - name: GitLab | Parse do output
+      ansible.builtin.set_fact:
+        gitlab_token: "{{ gitlab_token_out.stdout | trim }}"
+      changed_when: false
+      no_log: true
+
+    - name: GitLab | Create user token via rails runner
+      ansible.builtin.command: >
+        docker exec gitlab gitlab-rails runner
+        "u = User.where(username: 'helvio').first;
+         t = PersonalAccessToken.new(user: u, name: 'helvio token', scopes: ['api'], expires_at: 1.year.from_now); 
+         t.set_token('{{gitlab_token}}'); 
+         t.save!"
+      changed_when: true
+      no_log: true
+
+    - name: GitLab | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/gitlab/helvio"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          data:
+            url: "https://{{ gitlab_host }}"
+            username: "helvio"
+            personal_token: "{{ gitlab_token }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+

@@ -1,0 +1,130 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    SONAR_HOME: /u01/sonar
+    jfrog_url: "http://127.0.0.1:8082"           # Router/Access
+    jfrog_admin_user: "admin"
+    jfrog_admin_current_password: "password"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: Sonar | Configuring NGINX
+      copy:
+        dest: "/etc/nginx/conf.d/sonar.conf"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          server {
+              listen        443 ssl;
+              server_name {{ sonar_host }};
+
+              ssl_certificate      /etc/nginx/certs/ssl.cer;
+              ssl_certificate_key  /etc/nginx/certs/ssl.key;
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              client_max_body_size 100000M;
+
+              location / {
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:9000;
+              }
+          
+          }
+
+    - name: Sonar | Reload nginx config
+      shell: |
+        nginx -s reload
+
+    - name: Sonar | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+          - { path: "{{ SONAR_HOME }}" }
+
+    - name: Sonar | Creating docker-compose.yml
+      copy:
+        dest: "{{ SONAR_HOME }}/docker-compose.yml"
+        content: |
+          services:
+            sonarqube:
+              image: sonarqube:lts-community
+              container_name: sonarqube
+              depends_on:
+                - db
+              restart: unless-stopped
+
+              ports:
+                - "9000:9000"
+
+              environment:
+                SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
+                SONAR_JDBC_USERNAME: sonar
+                SONAR_JDBC_PASSWORD: sonar
+
+              volumes:
+                - sonarqube_data:/opt/sonarqube/data
+                - sonarqube_extensions:/opt/sonarqube/extensions
+                - sonarqube_logs:/opt/sonarqube/logs
+
+            db:
+              image: postgres:15
+              container_name: sonarqube-db
+              restart: unless-stopped
+
+              environment:
+                POSTGRES_USER: sonar
+                POSTGRES_PASSWORD: sonar
+                POSTGRES_DB: sonar
+
+              volumes:
+                - postgresql_data:/var/lib/postgresql/data
+
+          volumes:
+            sonarqube_data:
+            sonarqube_extensions:
+            sonarqube_logs:
+            postgresql_data:
+
+    - name: Ensure vm.max_map_count for SonarQube
+      become: true
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: "262144"
+        state: present
+        reload: true
+
+    - name: Sonar | Start service
+      shell: |
+        cd {{ SONAR_HOME }}
+        docker compose up -d
+
+    - name: Sonar | Wait for Sonaq container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' sonarqube
+      register: sonar_running
+      retries: 60
+      delay: 10
+      until: sonar_running.stdout == "true"
+      changed_when: false
+
+
