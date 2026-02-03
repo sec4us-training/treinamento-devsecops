@@ -24,6 +24,7 @@
       - matrix-auth
       - jfrog
       - hashicorp-vault
+      - sonar
 
   vars_files:
     - vars.yml

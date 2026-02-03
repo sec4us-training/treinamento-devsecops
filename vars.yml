@@ -13,3 +13,4 @@ jfrog_repo_key: "sec4us"
 vault_home: /u01/vault
 gitlab_external_url: "https://{{ gitlab_host }}"
 gitlab_api_version: v4
+pip_extra_args: "--break-system-packages"

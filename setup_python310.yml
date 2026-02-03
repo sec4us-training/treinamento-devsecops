@@ -22,7 +22,7 @@
   ignore_errors: yes
   ansible.builtin.pip:
     executable: pip3
-    extra_args: --break-system-packages
+    extra_args: "{{pip_extra_args}}"
     name:
       - distorm3
       - yara

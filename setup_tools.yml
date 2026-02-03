@@ -13,14 +13,14 @@
     - name: Tools | Install pyccat
       ansible.builtin.pip:
         executable: pip3
-        extra_args: --break-system-packages
+        extra_args: "{{pip_extra_args}}"
         name:
           - pyccat>=0.1.8
 
     - name: Tools | Install filecrawler
       ansible.builtin.pip:
         executable: pip3
-        extra_args: --break-system-packages
+        extra_args: "{{pip_extra_args}}"
         name:
           - filecrawler>=0.1.8
 

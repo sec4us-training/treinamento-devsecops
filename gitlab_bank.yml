@@ -228,6 +228,7 @@
                   ])
               }
 
+              /*
               stage('Gradle + SonarQube') {
                   withSonarQubeEnv('sonarqube') {
                       sh './gradlew clean sonarqube'
@@ -242,6 +243,7 @@
                       }
                   }
               }
+              */
 
               stage('Build com segredos do Vault') {
                 steps {
@@ -267,6 +269,8 @@
                         set +x
                         echo "Rodando build..."
                         
+                        echo "Conectando ao banco de dados ${DB_USER} com a senha ${DB_PASS}"
+
                       '''
                     }
                   }

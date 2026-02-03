@@ -56,6 +56,26 @@ status_file=/root/executed.txt
 
 PYTHON3="/usr/bin/python3"
 
+# Obter versão do Python (major.minor)
+PY_VERSION="$($PYTHON3 - <<'EOF'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+EOF
+)"
+
+MAJOR="${PY_VERSION%%.*}"
+MINOR="${PY_VERSION##*.}"
+
+PIP_FLAGS=""
+
+# Python 3.12+ exige --break-system-packages em muitos distros (PEP 668)
+if [ "$MAJOR" -gt 3 ] || { [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 12 ]; }; then
+  PIP_FLAGS="--break-system-packages"
+fi
+
+echo "[INFO] Python version: $PY_VERSION"
+echo "[INFO] pip flags: ${PIP_FLAGS:-<none>}"
+
 grep "startup_script" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
     echo -e "${DEBUG} ${C}Pulando startup base...${W}"
@@ -77,7 +97,7 @@ else
     systemctl start ssh
 
     echo -e "\n${OK} Instalando/atualizando versão do ansible core"
-    $PYTHON3 -m pip install -U ansible 'ansible-core>=2.20.0' 'jinja2>=3.1.6' hvac --break-system-packages
+    $PYTHON3 -m pip install $PIP_FLAGS -U ansible 'ansible-core>=2.20.0' 'jinja2>=3.1.6' hvac
     if [ "$?" != "0" ]; then
         echo -e "${ERROR} ${O} Erro atualizando Ansible${W}\n"
         info
@@ -117,8 +137,25 @@ if [ ! -f "$SSH_FILE_PUB" ]; then
 fi
 
 echo -e "\n${OK} Realizando o download dos scripts"
-git clone https://github.com/sec4us-training/web-api-linux.git /tmp/devsecops
+git clone https://github.com/sec4us-training/treinamento-devsecops /tmp/devsecops
 pushd /tmp/devsecops
+
+
+# Garante que o arquivo existe
+VARS_FILE="vars.yml"
+if [ ! -f "$VARS_FILE" ]; then
+  echo "[ERROR] $VARS_FILE não encontrado"
+  exit 1
+fi
+
+# Se a chave já existe, substitui; senão, adiciona
+if grep -qE '^[[:space:]]*pip_extra_args:' "$VARS_FILE"; then
+  sed -i \
+    "s|^[[:space:]]*pip_extra_args:.*|pip_extra_args: \"${PIP_EXTRA_ARGS}\"|" \
+    "$VARS_FILE"
+else
+  echo "pip_extra_args: \"${PIP_EXTRA_ARGS}\"" >> "$VARS_FILE"
+fi
 
 cp -f $SSH_FILE ssh_key.pem
 cp -f $SSH_FILE_PUB ssh_key.pub
@@ -285,6 +322,9 @@ else
 fi
 
 # Step 6 - Artifactory
+
+echo "step6_jfrog" >> "$status_file"
+
 echo -e "\n${OK} Executando passo 6 - install_jfrog.yml"
 grep "step6_jfrog" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
