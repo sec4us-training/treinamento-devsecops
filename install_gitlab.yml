@@ -170,8 +170,6 @@
       changed_when: true
       no_log: true
 
-glpat-NZ5mK8yP7R4C2xAqFJvW
-
     - name: GitLab | Parse do output
       ansible.builtin.set_fact:
         gitlab_root_token: "{{ gitlab_root_token_out.stdout.trim() }}"
