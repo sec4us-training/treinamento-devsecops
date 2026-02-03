@@ -40,6 +40,7 @@
   when:
     - project_exists
     - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
+  no_log: true
 
 - name: "Project debug"
   debug:

@@ -13,42 +13,37 @@
   tasks:
     - include_tasks: 'user_details.yml'
     - include_tasks: 'vault_token.yml'
-
-    - name: Vault | Read gitlab token
-      ansible.builtin.uri:
-        url: "https://{{ vault_host }}/v1/secret/gitlab/admin"
-        method: GET
-        headers:
-          X-Vault-Token: "{{ vault_token }}"
-        validate_certs: false
-        status_code: 200
-      register: read_secret
-      no_log: true
+    - include_tasks: 'vault_token_gitlab.yml'
 
     - name: GitLab | Check if path exists
       stat:
-        path: /tmp/bank_api/
+        path: /tmp/bank_git/
       register: git_path
 
     - name: GitLab | Git clone
       shell: |
         git config --global user.name "Helvio Junior"
         git config --global user.email "helvio@labs.sec4us.com.br"
+        chown 600 "{{ GITLAB_HOME }}/id_rsa_root"
 
         cd /tmp
         rm -rf /tmp/bank_api/
+        rm -rf /tmp/bank_git/
         git clone https://github.com/sec4us-training/web-api-linux.git bank_api
-        cd bank_api
-        rm -rf .git*
+
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git clone "git@{{gitlab_host}}:sec4us/bank.git" /tmp/bank_git
+        rsync -a ./bank_api/bank/* /tmp/bank_git/
+
+        cd /tmp/bank_git/
+        find . -path "*/migrations/0*.py" ! -path "*/lib/*" -exec rm -rf {} \;
+
       ignore_errors: false
       become: yes
       when: not git_path.stat.exists
-      args:
-        warn: false
 
     - name: Creating a gitignore
       copy:
-        dest: "/tmp/bank_api/bank/.gitignore"
+        dest: "/tmp/bank_git/.gitignore"
         content: |
           # Django #
           *.log
@@ -67,9 +62,6 @@
           
           __MACOSX
           **/__MACOSX
-
-          # Config file
-          config.ini
 
           # Backup files #
           *.bak
@@ -187,20 +179,29 @@
           !.vscode/extensions.json
           .history
 
+    - name: Creatting Bank config file
+      copy:
+        dest: "/tmp/bank_git/config.ini"
+        force: yes
+        content: |
+          [GENERAL]
+          debug=True
+
+          [DATABASE]
+          user = bank
+          passwd = 123456
+          db = bank
+          host = localhost
+          port = 3306
+          charset = utf8
+          autocommit = False
+
     - name: GitLab | Commit
       shell: |
-        chown 600 "{{ GITLAB_HOME }}/id_rsa_helvio"
-        cd /tmp/bank_api/bank/
-        rm -rf .git/*
-        find . -path "*/migrations/0*.py" ! -path "*/lib/*" -exec rm -rf {} \;
-        git init
+        cd /tmp/bank_git/
         git branch -m main
         git add .
         git commit -m "Deploy"
-        git remote add origin "git@{{gitlab_host}}:sec4us/bank.git"
-        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_helvio -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
-
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
       ignore_errors: false
-      args:
-        warn: false
 

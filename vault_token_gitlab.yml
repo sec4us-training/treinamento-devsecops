@@ -1,0 +1,14 @@
+- name: Vault | Read gitlab token
+  ansible.builtin.uri:
+    url: "https://{{ vault_host }}/v1/secret/gitlab/admin"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    validate_certs: false
+    status_code: 200
+  register: read_secret
+  no_log: true
+
+- name: "Set data to API1"
+  set_fact:
+    gitlab_admin_token: "{{ read_secret.json.data.data.personal_token }}"

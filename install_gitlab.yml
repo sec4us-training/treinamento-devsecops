@@ -65,6 +65,15 @@
           - { path: "{{ GITLAB_HOME }}/logs" }
           - { path: "{{ GITLAB_HOME }}/data" }
     
+    - name: Base | Generate admin's SSH key
+      user:
+        name: "admin"
+        generate_ssh_key: yes
+        ssh_key_type: rsa
+        ssh_key_bits: 4096
+        ssh_key_file: "{{ GITLAB_HOME }}/id_rsa_root"
+        force: no
+
     - name: GitLab | Creating docker-compose.yml
       copy:
         dest: "{{ GITLAB_HOME }}/docker-compose.yml"
@@ -193,4 +202,18 @@
         validate_certs: false
         status_code: [200, 204]
       no_log: true
+
+    - name: Get SSH public key
+      slurp:
+        src: "{{ GITLAB_HOME }}/id_rsa_root.pub"
+      register: remote_ssk_pub_encoded
+    
+    - include_tasks: 'vault_token_gitlab.yml'
+
+    - name: "Set data to API1"
+      set_fact:
+        gitlab_username: "root"
+        gitlab_ssh_key: "{{remote_ssk_pub_encoded.content | b64decode}}"
+
+    - include_tasks: "create_user_sshkey.yml"
 

@@ -189,7 +189,7 @@ export ANSIBLE_DEPRECATION_WARNINGS=False
 
 # Check conectivity and if user has root privileges
 echo -e "\n${OK} Verificando usuário"
-ansible-playbook -vvv -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' check_user.yml
+ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' check_user.yml
 if [ "$?" != "0" ]; then
     echo -e "${ERROR} ${O} Erro verificando usuário${W}\n"
     info
