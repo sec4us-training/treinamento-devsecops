@@ -97,7 +97,7 @@ else
     systemctl start ssh
 
     echo -e "\n${OK} Instalando/atualizando versão do ansible core"
-    $PYTHON3 -m pip install $PIP_FLAGS -U ansible 'ansible-core>=2.20.0' 'jinja2>=3.1.6' hvac
+    $PYTHON3 -m pip install $PIP_FLAGS -U ansible 'ansible-core>=2.17.0' 'jinja2>=3.1.6' hvac
     if [ "$?" != "0" ]; then
         echo -e "${ERROR} ${O} Erro atualizando Ansible${W}\n"
         info
