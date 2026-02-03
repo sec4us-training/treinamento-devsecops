@@ -26,23 +26,18 @@
               ssl_certificate      /etc/nginx/certs/ssl.cer;
               ssl_certificate_key  /etc/nginx/certs/ssl.key;
 
-              root {{ WEB_HOME }};
+              root /dev/null;
               index index.html index.htm;
-
-              # Charset padrão
-              charset utf-8;
-              charset_types
-                  text/plain
-                  text/html
-                  text/css
-                  application/javascript
-                  application/json;
+              try_files $uri $uri/ $uri/404 =404;
 
               location / {
-                  autoindex on;
-                  autoindex_exact_size off;
-                  autoindex_localtime on;
-                  try_files $uri $uri/ =404;
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:8054;
               }
 
           }
@@ -60,11 +55,12 @@
         mode: 0775
       with_items:
           - { path: "{{ WEB_HOME }}" }
-          - { path: "{{ WEB_HOME }}/.git" }
+          - { path: "{{ WEB_HOME }}/data" }
+          - { path: "{{ WEB_HOME }}/data/.git" }
     
-    - name: GitLab | Create README.txt
+    - name: Web01 | Create README.txt
       copy:
-        dest: "{{ WEB_HOME }}/README.txt"
+        dest: "{{ WEB_HOME }}/data/README.txt"
         owner: root
         group: root
         mode: 0644
@@ -111,6 +107,57 @@
           Boa sorte.
           Equipe Sec4US treinamentos - DevSecOps
 
+    - name: Web01 | Creating httpd-web01.conf
+      copy:
+        dest: "{{ WEB_HOME }}/httpd-web01.conf"
+        content: |
+          ServerName {{ web01_host }}
+
+          Listen 80
+
+          # =========================
+          # MPM (OBRIGATÓRIO)
+          # =========================
+          LoadModule mpm_event_module modules/mod_mpm_event.so
+
+          # =========================
+          # Módulos básicos
+          # =========================
+          LoadModule unixd_module modules/mod_unixd.so
+          LoadModule authz_core_module modules/mod_authz_core.so
+          LoadModule authz_host_module modules/mod_authz_host.so
+          LoadModule dir_module modules/mod_dir.so
+          LoadModule autoindex_module modules/mod_autoindex.so
+          LoadModule mime_module modules/mod_mime.so
+          LoadModule log_config_module modules/mod_log_config.so
+          LoadModule headers_module modules/mod_headers.so
+
+          TypesConfig conf/mime.types
+
+          # =========================
+          # Document Root
+          # =========================
+          DocumentRoot "/usr/local/apache2/htdocs"
+
+          <Directory "/usr/local/apache2/htdocs">
+              Options Indexes FollowSymLinks
+              AllowOverride None
+              Require all granted
+          </Directory>
+
+          # =========================
+          # Directory listing
+          # =========================
+          IndexOptions FancyIndexing HTMLTable NameWidth=* Charset=UTF-8
+          DirectoryIndex index.html index.htm
+
+          AddDefaultCharset UTF-8
+
+          # =========================
+          # Logs (stdout / stderr)
+          # =========================
+          ErrorLog /proc/self/fd/2
+          CustomLog /proc/self/fd/1 combined
 
     - name: Web01 | Get .git path
       ansible.builtin.set_fact:
@@ -118,16 +165,45 @@
 
     - name: Web01 | Sync files
       shell: |
-        rsync -a {{ git_dir_path }}/* {{ WEB_HOME }}/.git
+        rsync -a {{ git_dir_path }}/* {{ WEB_HOME }}/data/.git
 
-    - name: Web01 | Getting NGINX user conf
+    - name: Web01 | Creating docker-compose.yml
+      copy:
+        dest: "{{ WEB_HOME }}/docker-compose.yml"
+        content: |
+          services:
+            apache:
+              image: httpd:2.4
+              container_name: apache-web01
+              restart: unless-stopped
+
+              ports:
+                - "8054:80"
+
+              volumes:
+                # Conteúdo servido
+                - {{ WEB_HOME }}/data:/usr/local/apache2/htdocs
+
+                # Configuração customizada
+                - {{ WEB_HOME }}/httpd-web01.conf:/usr/local/apache2/conf/httpd.conf:ro
+
+    - name: Web01 | Start service
       shell: |
-        cat /etc/nginx/nginx.conf | grep -E '\buser\b' | sed 's/user//g;s/\;//g' | tr -d ' ' > /tmp/nginxuser.txt
+        cd {{ WEB_HOME }}
+        docker compose up -d
 
-    - name: Web01 | Adjusting permitions
-      shell: |
-        nginx_user=$(cat /tmp/nginxuser.txt | tr -d '\n')
-        echo "Nginx User: $nginx_user"
-        chown $nginx_user:$nginx_user -R "{{ WEB_HOME }}"
+    - name: Web01 | Wait for container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' apache-web01
+      register: web01_running
+      retries: 60
+      delay: 10
+      until: web01_running.stdout == "true"
+      changed_when: false
 
+    - name: Web01 | Wait for port 8054
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8054
+        delay: 10
+        timeout: 300
 

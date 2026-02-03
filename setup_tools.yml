@@ -32,7 +32,7 @@
     - name: Tools | GitLeaks
       ansible.builtin.shell: |
         cd /tmp/
-        url=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases | jq -r '[ .[] | {id: .id, tag_name: .tag_name, assets: [ .assets[] | select(.name|match("linux-amd64.tar.gz$")) | {name: .name, browser_download_url: .browser_download_url} ]} | select(.assets != []) ] | sort_by(.id) | reverse | first(.[].assets[]) | .browser_download_url')
+        url=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases | jq -r '[ .[] | {id: .id, tag_name: .tag_name, assets: [ .assets[] | select(.name|match("linux_x64.tar.gz$")) | {name: .name, browser_download_url: .browser_download_url} ]} | select(.assets != []) ] | sort_by(.id) | reverse | first(.[].assets[]) | .browser_download_url')
         rm -rf gitleaks-latest.tar.gz
         wget -nv -O gitleaks-latest.tar.gz "$url"
         tar -xzf gitleaks-latest.tar.gz
