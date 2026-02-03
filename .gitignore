@@ -56,6 +56,7 @@ front/.DS_Store
 front/Thumbs.db
 
 # .env
+.env
 front/.env
 back/.env
 
