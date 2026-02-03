@@ -81,7 +81,7 @@
           services:
 
             postgres:
-              image: postgres:15-alpine
+              image: postgres:13-alpine
               container_name: jfrog-postgres
               restart: unless-stopped
               environment:
