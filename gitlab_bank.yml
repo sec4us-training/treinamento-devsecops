@@ -191,7 +191,7 @@
           user = bank
           passwd = 123456
           db = bank
-          host = localhost
+          host = bankdb
           port = 3306
           charset = utf8
           autocommit = False
