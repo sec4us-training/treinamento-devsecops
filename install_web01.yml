@@ -29,6 +29,15 @@
               root {{ WEB_HOME }};
               index index.html index.htm;
 
+              # Charset padrão
+              charset utf-8;
+              charset_types
+                  text/plain
+                  text/html
+                  text/css
+                  application/javascript
+                  application/json;
+
               location / {
                   autoindex on;
                   autoindex_exact_size off;
@@ -53,6 +62,56 @@
           - { path: "{{ WEB_HOME }}" }
           - { path: "{{ WEB_HOME }}/.git" }
     
+    - name: GitLab | Create README.txt
+      copy:
+        dest: "{{ WEB_HOME }}/README.txt"
+        owner: root
+        group: root
+        mode: 0644
+        force: yes
+        content: |
+          Web01 – Static Content Service
+          =============================
+
+          Este diretório contém os arquivos estáticos atualmente servidos pelo Web01.
+          O serviço foi configurado de forma simples para facilitar testes, análises
+          e validações rápidas em ambiente controlado.
+
+          Estrutura visível:
+          - index.html
+          - assets/
+          - README.txt
+
+          ATENÇÃO:
+          Este NÃO é o projeto completo.
+
+          Durante o desenvolvimento inicial, o repositório Git foi mantido no mesmo
+          diretório raiz utilizado pelo servidor web. Por questões de compatibilidade
+          e rapidez no deploy, o diretório .git nunca foi separado do conteúdo servido.
+
+          Isso significa que:
+          - Apenas parte do projeto está visível na raiz
+          - O histórico completo ainda existe no diretório .git
+          - Arquivos removidos ou alterados podem ser encontrados no histórico
+
+          Dica para análise:
+          Caso você esteja procurando por arquivos que “sumiram”, versões antigas,
+          configurações anteriores ou informações sensíveis, o diretório .git pode
+          conter exatamente o que você precisa.
+
+          Em revisões anteriores, a análise direta do .git revelou:
+          - commits antigos
+          - arquivos que não deveriam mais existir
+          - decisões que não aparecem no estado atual do projeto
+
+          Nota final:
+          Nem tudo que importa está listado pelo index do diretório principal.
+          Às vezes, a resposta está no histórico.
+
+          Boa sorte.
+          Equipe Sec4US treinamentos - DevSecOps
+
+
     - name: Web01 | Get .git path
       ansible.builtin.set_fact:
         git_dir_path: "{{ playbook_dir }}/.git"
