@@ -13,7 +13,7 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
-    - name: "Set data to API1"
+    - name: "Set data"
       set_fact:
         gitlab_project_group: "sec4us"
         gitlab_project_name: "bank"

@@ -65,7 +65,7 @@
           - { path: "{{ GITLAB_HOME }}/logs" }
           - { path: "{{ GITLAB_HOME }}/data" }
     
-    - name: Base | Generate admin's SSH key
+    - name: GitLab | Generate admin's SSH key
       user:
         name: "admin"
         generate_ssh_key: yes
@@ -225,7 +225,7 @@
     
     - include_tasks: 'vault_token_gitlab.yml'
 
-    - name: "Set data to API1"
+    - name: "Set data"
       set_fact:
         gitlab_username: "root"
         gitlab_ssh_key: "{{remote_ssk_pub_encoded.content | b64decode}}"
