@@ -15,3 +15,11 @@ vault_home: /u01/vault
 gitlab_external_url: "https://{{ gitlab_host }}"
 gitlab_api_version: v4
 pip_extra_args: "--break-system-packages"
+
+# Informacoes Jenkins Job
+job_name: "web01-pipeline"
+job_description: "Pipeline job pulling Jenkinsfile from SCM"
+repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
+repo_branch: "*/main"
+script_path: "Jenkinsfile"
+credentials_id: "gitlab-gitscm"

@@ -222,7 +222,7 @@
                 branches: [[name: '*/main']],
                 userRemoteConfigs: [[
                   url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
-                  credentialsId: 'gitlab-gitscm'
+                  credentialsId: '{{credentials_id}}'
                 ]]
               ])
             }
@@ -262,3 +262,6 @@
         GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
       ignore_errors: false
 
+
+    - include_tasks: 'vault_token_jenkins.yml'
+    - include_tasks: 'jenkins_pipeline.yml'

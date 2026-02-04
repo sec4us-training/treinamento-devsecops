@@ -6,18 +6,27 @@
   delegate_to: localhost
   run_once: true
 
-- name: Jenkins | Get crumb
+
+- name: Jenkins | Get crumb (CSRF token)
   ansible.builtin.uri:
     url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
     method: GET
     user: "admin"
     password: "{{ jenkins_admin_password }}"
-    force_basic_auth: true
-    return_content: true
+    force_basic_auth: yes
+    return_content: yes
     status_code: 200
-    validate_certs: false
-  register: crumb
-  changed_when: false
+  register: crumb_json
+
+- name: Jenkins | Build CSRF header
+  set_fact:
+    jenkins_crumb_header: >-
+      {{
+        {
+          crumb_json.json.crumbRequestField:
+          crumb_json.json.crumb
+        }
+      }}
 
 - name: Jenkins | Check if job exists
   ansible.builtin.uri:
@@ -57,14 +66,14 @@
     validate_certs: false
   when: job_check.status == 200
 
-#- name: Jenkins | Trigger a build (optional)
-#  ansible.builtin.uri:
-#    url: "https://{{ jenkins_host }}/job/{{ job_name }}/build"
-#    method: POST
-#    user: "admin"
-#    password: "{{ jenkins_admin_password }}"
-#    force_basic_auth: true
-#    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
-#    status_code: [201, 302]
-#    validate_certs: false
-#  when: job_check.status in [200, 404]
+- name: Jenkins | Trigger a build (optional)
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/job/{{ job_name }}/build"
+    method: POST
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
+    status_code: [201, 302]
+    validate_certs: false
+  when: job_check.status in [200, 404]

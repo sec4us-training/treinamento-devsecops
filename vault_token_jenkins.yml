@@ -1,0 +1,14 @@
+- name: Vault | Read jenkins token
+  ansible.builtin.uri:
+    url: "https://{{ vault_host }}/v1/secret/jenkins/admin"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    validate_certs: false
+    status_code: 200
+  register: read_secret
+  no_log: true
+
+- name: "Set data"
+  set_fact:
+    jenkins_admin_password: "{{ read_secret.json.data.password }}"

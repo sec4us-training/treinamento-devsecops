@@ -5,15 +5,6 @@
     ansible_python_interpreter: "/usr/bin/python3"
     JENKINS_HOME: /u01/jenkins
 
-    job_name: "web01-pipeline"
-    job_description: "Pipeline job pulling Jenkinsfile from SCM"
-
-    repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
-    repo_branch: "*/main"
-    script_path: "Jenkinsfile"
-
-    credentials_id: "gitlab-gitscm"  # credencial já criada no Jenkins
-
     jenkins_plugins:
       - git
       - workflow-aggregator
@@ -90,9 +81,20 @@
           - { path: "{{ JENKINS_HOME }}/ssh_keys" }    
 
     - name: Jenkins | Copy CA root cert
-      shell: |
-        rsync -av /etc/nginx/certs/root-ca.pem {{ JENKINS_HOME }}/root-ca.crt
-        rsync -av /root/.ssh/* {{ JENKINS_HOME }}/ssh_keys
+      copy:
+        src: "/etc/nginx/certs/root-ca.pem"
+        dest: "{{ JENKINS_HOME }}/root-ca.crt"
+        owner: "root"
+        group: "root"
+
+    - name: Jenkins | Copy SSH keys
+      copy:
+        src: "{{ item }}"
+        dest: "{{ JENKINS_HOME }}/ssh_keys"
+        owner: "root"
+        group: "root"
+      with_fileglob:
+        - /root/.ssh/id_rsa*
 
     - name: Jenkins | Creating Dockerfile
       copy:
@@ -195,7 +197,7 @@
 
     - name: Jenkins | Wait for Jenkins to be ready
       ansible.builtin.uri:
-        url: "http://localhost:8080/login"
+        url: "https://{{ jenkins_host }}/login"
         method: GET
         return_content: yes
         status_code: 200
@@ -235,9 +237,23 @@
       set_fact:
         jenkins_admin_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
 
+    - name: Jenkins | Wait for Jenkins to be ready
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_initial_admin_password }}"
+        force_basic_auth: yes
+        return_content: yes
+        status_code: 200
+      register: jenkins_check
+      retries: 60
+      delay: 10
+      until: jenkins_check.status == 200
+
     - name: Jenkins | Get crumb (CSRF token)
       ansible.builtin.uri:
-        url: "http://localhost:8080/crumbIssuer/api/json"
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
         method: GET
         user: "admin"
         password: "{{ jenkins_initial_admin_password }}"
@@ -258,7 +274,7 @@
 
     - name: Jenkins | Create Jenkins admin user
       uri:
-        url: http://localhost:8080/setupWizard/createAdminUser
+        url: "https://{{ jenkins_host }}/setupWizard/createAdminUser"
         method: POST
         user: admin
         password: "{{ jenkins_initial_admin_password }}"
@@ -280,7 +296,7 @@
 
     - name: Jenkins | Get crumb (CSRF token)
       ansible.builtin.uri:
-        url: "http://localhost:8080/crumbIssuer/api/json"
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
         method: GET
         user: "admin"
         password: "{{ jenkins_admin_password }}"
@@ -303,7 +319,7 @@
 
     - name: Jenkins | Install Jenkins plugins
       uri:
-        url: "http://localhost:8080/pluginManager/installPlugins"
+        url: "https://{{ jenkins_host }}/pluginManager/installPlugins"
         method: POST
         user: admin
         password: "{{ jenkins_admin_password }}"
@@ -323,7 +339,7 @@
 
     - name: Jenkins | Wait for plugin installation to finish
       ansible.builtin.uri:
-        url: "http://localhost:8080/updateCenter/api/json?tree=jobs[id,type,status[_class]]"
+        url: "https://{{ jenkins_host }}/updateCenter/api/json?tree=jobs[id,type,status[_class]]"
         method: GET
         user: admin
         password: "{{ jenkins_admin_password }}"
@@ -345,7 +361,7 @@
 
     - name: Jenkins | Set Jenkins URL
       uri:
-        url: http://localhost:8080/setupWizard/configureInstance
+        url: "https://{{ jenkins_host }}/setupWizard/configureInstance"
         method: POST
         user: admin
         password: "{{ jenkins_admin_password }}"
@@ -363,7 +379,7 @@
 
     - name: Jenkins | Create API token
       uri:
-        url: http://localhost:8080/user/admin/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken
+        url: "https://{{ jenkins_host }}/user/admin/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken"
         method: POST
         user: admin
         password: "{{ jenkins_admin_password }}"
@@ -382,7 +398,7 @@
 
     - name: Jenkins | Restart Jenkins safely
       uri:
-        url: http://localhost:8080/safeRestart
+        url: "https://{{ jenkins_host }}/safeRestart"
         method: POST
         user: admin
         password: "{{ jenkins_admin_password }}"
@@ -392,15 +408,18 @@
 
     - name: Jenkins | Wait for Jenkins to be ready
       ansible.builtin.uri:
-        url: "http://localhost:8080/login"
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
         method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
         return_content: yes
         status_code: 200
       register: jenkins_check
       retries: 60
       delay: 10
       until: jenkins_check.status == 200
-
+      
     - name: Jenkins | Store credentials
       ansible.builtin.uri:
         url: "https://{{ vault_host }}/v1/secret/jenkins/admin"
@@ -449,6 +468,4 @@
 
     - include_tasks: 'jenkins_create_cred.yml'
     - include_tasks: 'jenkins_pipeline.yml'
-
-    
 
