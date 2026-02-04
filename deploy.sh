@@ -151,10 +151,10 @@ fi
 # Se a chave já existe, substitui; senão, adiciona
 if grep -qE '^[[:space:]]*pip_extra_args:' "$VARS_FILE"; then
   sed -i \
-    "s|^[[:space:]]*pip_extra_args:.*|pip_extra_args: \"${PIP_EXTRA_ARGS}\"|" \
+    "s|^[[:space:]]*pip_extra_args:.*|pip_extra_args: \"${PIP_FLAGS}\"|" \
     "$VARS_FILE"
 else
-  echo "pip_extra_args: \"${PIP_EXTRA_ARGS}\"" >> "$VARS_FILE"
+  echo "pip_extra_args: \"${PIP_FLAGS}\"" >> "$VARS_FILE"
 fi
 
 cp -f $SSH_FILE ssh_key.pem
