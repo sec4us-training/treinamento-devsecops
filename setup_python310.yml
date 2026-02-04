@@ -3,6 +3,7 @@
     repo: "ppa:deadsnakes/ppa"
     state: present
     update_cache: yes
+  ignore_errors: yes
 
 - name: Python 3.10 | Updating apt cache
   apt:
