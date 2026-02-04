@@ -107,6 +107,27 @@
               }
           
           }
+          server {
+              listen        80;
+              server_name {{ registry_host }};
+
+              root /dev/null;
+              index index.html index.htm;
+              try_files $uri $uri/ $uri/404 =404;
+
+              client_max_body_size 100000M;
+
+              location / {
+                  proxy_http_version    1.1;
+                  proxy_ssl_verify      off;
+                  proxy_set_header      Host                $host;
+                  proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      X-Forwarded-For     $remote_addr;
+                  proxy_set_header      X-Forwarded-Proto   $scheme;
+                  proxy_pass http://127.0.0.1:5000;
+              }
+          
+          }
 
     - name: Docker | Reload nginx config
       shell: |
