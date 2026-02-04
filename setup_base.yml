@@ -28,6 +28,7 @@
         echo "127.0.0.1    {{ gitlab_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ artifactory_host }}" >> /etc/hosts
         echo "127.0.0.1    {{ jenkins_host }}" >> /etc/hosts
+        echo "127.0.0.1    {{ registry_host }}" >> /etc/hosts
         
     - name: Base | Make sure we have a 'sec4us' group
       group:

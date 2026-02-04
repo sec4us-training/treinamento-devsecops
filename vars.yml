@@ -8,6 +8,7 @@ artifactory_host: artifactory.labs.sec4us.com.br
 jenkins_host: jenkins.labs.sec4us.com.br
 sonar_host: sonar.labs.sec4us.com.br
 web01_host: www.labs.sec4us.com.br
+registry_host: registry.labs.sec4us.com.br
 
 jfrog_repo_key: "sec4us"
 vault_home: /u01/vault

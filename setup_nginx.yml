@@ -77,10 +77,44 @@
   shell: |
     rm -rf /etc/nginx/conf.d/*
 
+- name: NGINX | Default http
+  copy:
+    dest: "/etc/nginx/conf.d/default.conf"
+    owner: root
+    group: root
+    mode: 0644
+    force: yes
+    content: |
+      server {
+          listen 80 ;
+          server_name _;
+
+          location / {
+             return 403;
+          }
+
+          error_page 403 /403.txt;
+          location /403.txt{
+              internal;
+              return 403 'Forbidden';
+          }
+      }
+
 - name: NGINX | Restarting Nginx
   service:
     name: nginx
     state: restarted
+
+- name: Docker | /tmp/v3.ext
+  copy:
+    dest: "/tmp/v3.ext"
+    content: |
+      authorityKeyIdentifier=keyid,issuer
+      basicConstraints=CA:FALSE
+      keyUsage=digitalSignature,keyEncipherment
+      extendedKeyUsage=serverAuth
+      subjectAltName=DNS:*.labs.sec4us.com.br,DNS:labs.sec4us.com.br,DNS:registry.labs.sec4us.com.br
+
 
 - name: NGINX | Create a self signed certificate
   shell: |
@@ -94,8 +128,15 @@
     openssl genrsa -out /tmp/tls-key-temp.pem 4096
     openssl pkcs8 -inform PEM -outform PEM -in /tmp/tls-key-temp.pem -topk8 -nocrypt -v1 PBE-SHA1-3DES -out /etc/nginx/certs/ssl.key
        
-    openssl req -new -key /etc/nginx/certs/ssl.key -subj "/C=BR/ST=PR/L=Curitiba/O=Security/OU=DevSecOps/CN=*.labs.sec4us.com.br" -out /tmp/admin.csr
+    openssl req -new -key /etc/nginx/certs/ssl.key -subj "/C=BR/ST=PR/L=Curitiba/O=Security/OU=DevSecOps/CN=labs.sec4us.com.br" -out /tmp/admin.csr
        
-    openssl x509 -req -in /tmp/admin.csr -CA /etc/nginx/certs/root-ca.pem -CAkey /etc/nginx/certs/root-ca-key.pem -CAcreateserial -sha256 -out /etc/nginx/certs/ssl.cer -days 730
+    openssl x509 -req -in /tmp/admin.csr -CA /etc/nginx/certs/root-ca.pem -CAkey /etc/nginx/certs/root-ca-key.pem -CAcreateserial -sha256 -out /etc/nginx/certs/ssl.cer -days 730 -extfile /tmp/v3.ext
 
+
+- name: NGINX | Save root CA to local machine
+  shell: |
+    rsync -av /etc/nginx/certs/root-ca.pem /usr/local/share/ca-certificates/root-ca.crt
+    update-ca-certificates
+    mkdir -p /etc/docker/certs.d/registry.labs.sec4us.com.br
+    rsync -av /etc/nginx/certs/root-ca.pem /etc/docker/certs.d/registry.labs.sec4us.com.br/ca.crt
 
