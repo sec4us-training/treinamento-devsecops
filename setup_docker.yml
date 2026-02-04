@@ -108,7 +108,7 @@
           
           }
 
-    - name: Jenkins | Reload nginx config
+    - name: Docker | Reload nginx config
       shell: |
         nginx -s reload
 
