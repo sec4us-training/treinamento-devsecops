@@ -222,7 +222,7 @@
                 branches: [[name: '*/main']],
                 userRemoteConfigs: [[
                   url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
-                  credentialsId: '{{credentials_id}}'
+                  credentialsId: '{% endraw %}{{credentials_id}}{% raw %}'
                 ]]
               ])
             }
