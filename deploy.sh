@@ -73,8 +73,8 @@ if [ "$MAJOR" -gt 3 ] || { [ "$MAJOR" -eq 3 ] && [ "$MINOR" -ge 12 ]; }; then
   PIP_FLAGS="--break-system-packages"
 fi
 
-echo "[INFO] Python version: $PY_VERSION"
-echo "[INFO] pip flags: ${PIP_FLAGS:-<none>}"
+echo -e "\n${OK} Python version: $PY_VERSION"
+echo -e "${OK} pip flags: ${PIP_FLAGS:-<none>}"
 
 grep "startup_script" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
@@ -144,7 +144,7 @@ pushd /tmp/devsecops
 # Garante que o arquivo existe
 VARS_FILE="vars.yml"
 if [ ! -f "$VARS_FILE" ]; then
-  echo "[ERROR] $VARS_FILE não encontrado"
+  echo -e "${ERROR} ${O}${VARS_FILE} não encontrado${W}\n"
   exit 1
 fi
 
