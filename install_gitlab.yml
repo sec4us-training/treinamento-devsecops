@@ -85,8 +85,8 @@
               restart: always
               hostname: '{{ gitlab_host }}'
               environment:
-                - TZ: America/Sao_Paulo
-                - GITLAB_OMNIBUS_CONFIG: |
+                TZ: America/Sao_Paulo
+                GITLAB_OMNIBUS_CONFIG: |
                   external_url 'https://{{ gitlab_host }}'
                   gitlab_rails['gitlab_shell_ssh_port'] = 22
                   nginx['enable'] = false
@@ -192,7 +192,7 @@
         url: "https://{{ gitlab_host }}/api/v4/application/settings"
         method: PUT
         headers:
-          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+          PRIVATE-TOKEN: "{{ gitlab_root_token }}"
           Content-Type: "application/json"
         body_format: json
         body:

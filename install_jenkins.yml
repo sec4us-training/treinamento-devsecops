@@ -144,7 +144,7 @@
                 - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
                 # Opcional: ajuste memória se precisar
                 - JAVA_OPTS=-Xms512m -Xmx2048m
-                - TZ: America/Sao_Paulo
+                - TZ=America/Sao_Paulo
 
               volumes:
                 # Dados persistentes do Jenkins
@@ -328,8 +328,8 @@
           uc.json.jobs | default([]) |
           selectattr('status', 'defined') |
           selectattr('status._class', 'defined') |
-          rejectattr('status._class', 'search', 'Success$') |
-          list | length
+          selectattr('status._class', 'search', '(Pending|Installing|Downloading)')
+          | list | length
         ) == 0
       retries: 100
       delay: 10
