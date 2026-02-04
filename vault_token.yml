@@ -17,5 +17,10 @@
 
 - name: Definir variável vault_token
   ansible.builtin.set_fact:
-    vault_token: "{{ vault_key_raw.content | b64decode | trim }}"
+    vault_token: >-
+      {{ vault_key_raw.content
+         | b64decode
+         | regex_replace('[\r\n]+', '')
+         | trim
+      }}
   no_log: true

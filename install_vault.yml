@@ -152,6 +152,7 @@
                 - "8200:8200"
 
               environment:
+                TZ: America/Sao_Paulo
                 VAULT_ADDR: "http://0.0.0.0:8200"
                 VAULT_API_ADDR: "http://0.0.0.0:8200"
 
@@ -322,9 +323,8 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            username: "sec4us"
-            password: "MinhaSenhaSuperS3cret@"
+          username: "sec4us"
+          password: "MinhaSenhaSuperS3cret@"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
@@ -343,7 +343,7 @@
     - name: Debug
       ansible.builtin.debug:
         msg:
-          username: "User: {{ read_secret.json.data.data.username }}, Pass: {{ read_secret.json.data.data.password }}"
+          username: "User: {{ read_secret.json.data.username }}, Pass: {{ read_secret.json.data.password }}"
 
     - name: Read SSH key from controller
       ansible.builtin.set_fact:
@@ -358,9 +358,8 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            username: "root"
-            private_key: "{{ ssh_key_pem }}"
+          username: "root"
+          private_key: "{{ ssh_key_pem }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true

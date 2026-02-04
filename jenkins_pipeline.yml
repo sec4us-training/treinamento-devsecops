@@ -1,0 +1,70 @@
+---
+- name: Jenkins | Render job config.xml
+  ansible.builtin.template:
+    src: templates/job-config.xml.j2
+    dest: /tmp/{{ job_name }}.xml
+  delegate_to: localhost
+  run_once: true
+
+- name: Jenkins | Get crumb
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
+    method: GET
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    return_content: true
+    status_code: 200
+    validate_certs: false
+  register: crumb
+  changed_when: false
+
+- name: Jenkins | Check if job exists
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/job/{{ job_name }}/api/json"
+    method: GET
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+    validate_certs: false
+  register: job_check
+  changed_when: false
+
+- name: Jenkins | Create job (createItem)
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/createItem?name={{ job_name }}"
+    method: POST
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/xml'}) }}"
+    body: "{{ lookup('file', '/tmp/' ~ job_name ~ '.xml') }}"
+    status_code: [200, 201]
+    validate_certs: false
+  when: job_check.status == 404
+
+- name: Jenkins | Update job (config.xml)
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/job/{{ job_name }}/config.xml"
+    method: POST
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/xml'}) }}"
+    body: "{{ lookup('file', '/tmp/' ~ job_name ~ '.xml') }}"
+    status_code: [200]
+    validate_certs: false
+  when: job_check.status == 200
+
+- name: Jenkins | Trigger a build (optional)
+  ansible.builtin.uri:
+    url: "https://{{ jenkins_host }}/job/{{ job_name }}/build"
+    method: POST
+    user: "admin"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: true
+    headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
+    status_code: [201, 302]
+    validate_certs: false
+  when: job_check.status in [200, 404]

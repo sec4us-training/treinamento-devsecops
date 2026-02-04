@@ -85,6 +85,7 @@
               container_name: jfrog-postgres
               restart: unless-stopped
               environment:
+                TZ: America/Sao_Paulo
                 POSTGRES_DB: artifactory
                 POSTGRES_USER: artifactory
                 POSTGRES_PASSWORD: "ArtifactorySec4USLabP@sS"
@@ -258,10 +259,9 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            url: "https://{{ artifactory_host }}"
-            username: "{{ jfrog_admin_user }}"
-            password: "{{ jfrog_admin_current_password }}"
+          url: "https://{{ artifactory_host }}"
+          username: "{{ jfrog_admin_user }}"
+          password: "{{ jfrog_admin_current_password }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true

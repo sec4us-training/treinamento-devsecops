@@ -4,6 +4,16 @@
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
     JENKINS_HOME: /u01/jenkins
+
+    job_name: "web01-pipeline"
+    job_description: "Pipeline job pulling Jenkinsfile from SCM"
+
+    repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
+    repo_branch: "*/main"
+    script_path: "Jenkinsfile"
+
+    credentials_id: "gitlab-gitscm"  # credencial já criada no Jenkins
+
     jenkins_plugins:
       - git
       - workflow-aggregator
@@ -23,7 +33,7 @@
       - ssh-slaves
       - matrix-auth
       - jfrog
-      - hashicorp-vault
+      - hashicorp-vault-plugin
       - sonar
 
   vars_files:
@@ -78,18 +88,53 @@
       with_items:
           - { path: "{{ JENKINS_HOME }}" }    
 
+    - name: Jenkins | Copy CA root cert
+      shell: |
+        rsync -av /etc/nginx/certs/root-ca.pem {{ JENKINS_HOME }}/root-ca.crt
+
+    - name: Jenkins | Creating Dockerfile
+      copy:
+        dest: "{{ JENKINS_HOME }}/Dockerfile"
+        content: |
+          FROM jenkins/jenkins:lts-jdk21
+
+          USER root
+
+          # 1) Trust do sistema (git, curl, etc.)
+          COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
+          RUN update-ca-certificates
+
+          # 2) Trust do Java (plugins/HTTP clients Java)
+          RUN keytool -importcert -noprompt \
+            -alias root-ca \
+            -file /usr/local/share/ca-certificates/root-ca.crt \
+            -keystore "$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit
+
+          USER jenkins
+
     - name: Jenkins | Creating docker-compose.yml
       copy:
         dest: "{{ JENKINS_HOME }}/docker-compose.yml"
         content: |
           services:
             jenkins:
-              image: jenkins/jenkins:lts-jdk21
+              build:
+                context: .
+                dockerfile: Dockerfile
               container_name: jenkins
               restart: unless-stopped
 
               # Permite rodar builds que usam docker no host via /var/run/docker.sock
               user: "0:0"
+
+              extra_hosts:
+                - "{{vault_host}}:host-gateway"
+                - "{{gitlab_host}}:host-gateway"
+                - "{{artifactory_host}}:host-gateway"
+                - "{{jenkins_host}}:host-gateway"
+                - "{{sonar_host}}:host-gateway"
+                - "{{web01_host}}:host-gateway"
 
               ports:
                 - "8080:8080"   # UI
@@ -99,9 +144,11 @@
                 - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
                 # Opcional: ajuste memória se precisar
                 - JAVA_OPTS=-Xms512m -Xmx2048m
+                - TZ: America/Sao_Paulo
 
               volumes:
                 # Dados persistentes do Jenkins
+                - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
                 - {{JENKINS_HOME}}:/var/jenkins_home
 
                 # Acesso ao Docker do host (Docker-outside-of-Docker)
@@ -123,7 +170,7 @@
         docker compose up -d
 
     - name: Jenkins | Wait for container to be running
-      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jfrog-artifactory
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jenkins
       register: jenkins_running
       retries: 60
       delay: 10
@@ -147,6 +194,13 @@
       retries: 60
       delay: 10
       until: jenkins_check.status == 200
+
+    - name: Jenkins | Update System CA
+      command: >
+        docker exec jenkins bash -lc
+        "update-ca-certificates"
+      register: jenkins_password_raw
+      changed_when: false
 
     - name: Jenkins | Wait for admin password
       shell: |
@@ -277,7 +331,7 @@
           rejectattr('status._class', 'search', 'Success$') |
           list | length
         ) == 0
-      retries: 60
+      retries: 100
       delay: 10
 
     - name: Jenkins | Set Jenkins URL
@@ -306,6 +360,7 @@
         password: "{{ jenkins_admin_password }}"
         force_basic_auth: yes
         headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body_format: form-urlencoded
         body:
           newTokenName: "Admin token"
         status_code: 200
@@ -345,11 +400,10 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            url: "https://{{ jenkins_host }}"
-            username: "admin"
-            password: "{{ jenkins_admin_password }}"
-            toke: "{{ jenkins_api_token }}"
+          url: "https://{{ jenkins_host }}"
+          username: "admin"
+          password: "{{ jenkins_admin_password }}"
+          token: "{{ jenkins_api_token }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
@@ -358,38 +412,34 @@
 
     - name: Jenkins | Set fact 
       ansible.builtin.set_fact:
-        json_body: |
-          {
-            "": "0",
-            "credentials": {
-              "scope": "GLOBAL",
-              "id": "gitlab-gitscm",
-              "username": "oauth2",
-              "password": "{{ gitlab_admin_token }}",
-              "description": "GitLab PAT for GitSCM",
-              "$class": "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
-            }
-          }
+        json_body:
+          "": "0"
+          credentials:
+            scope: "GLOBAL"
+            id: "{{credentials_id}}"
+            username: "oauth2"
+            password: "{{ gitlab_admin_token }}"
+            description: "GitLab PAT for GitSCM"
+            "$class": "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
       no_log: true
 
     - include_tasks: 'jenkins_create_cred.yml'
 
     - name: Jenkins | Set fact 
       ansible.builtin.set_fact:
-        json_body: |
-          {
-            "": "0",
-            "credentials": {
-              "scope": "GLOBAL",
-              "id": "vault",
-              "secret": "{{ vault_token }}",
-              "description": "Vault token",
-              "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"
-            }
-          }
+        json_body: 
+          "": "15"
+          credentials:
+            scope: "GLOBAL"
+            id: "vault"
+            namespace: "/"
+            token: "{{ vault_token }}"
+            description: "Vault token"
+            "$class": "com.datapipe.jenkins.vault.credentials.VaultTokenCredential"
       no_log: true
 
     - include_tasks: 'jenkins_create_cred.yml'
+    - include_tasks: 'jenkins_pipeline.yml'
 
     
 

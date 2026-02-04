@@ -86,8 +86,16 @@
   shell: |
     cd /tmp/
     mkdir -p /etc/nginx/certs/
-    openssl req -x509 -subj '/CN=*.sec4us.com.br' -newkey rsa:4096 -passout pass:123456 -keyout key.pem -out cert.pem -sha256 -days 100
-    openssl rsa -in key.pem -passin pass:123456 -out /etc/nginx/certs/ssl.key
-    cp cert.pem /etc/nginx/certs/ssl.cer
+
+    openssl genrsa -out /etc/nginx/certs/root-ca-key.pem 4096
+       
+    openssl req -new -x509 -sha256 -key /etc/nginx/certs/root-ca-key.pem -subj "/C=BR/ST=PR/L=Curitiba/O=Security/OU=Treinamentos/CN=Sec4US Root CA" -out /etc/nginx/certs/root-ca.pem -days 3650
+    
+    openssl genrsa -out /tmp/tls-key-temp.pem 4096
+    openssl pkcs8 -inform PEM -outform PEM -in /tmp/tls-key-temp.pem -topk8 -nocrypt -v1 PBE-SHA1-3DES -out /etc/nginx/certs/ssl.key
+       
+    openssl req -new -key /etc/nginx/certs/ssl.key -subj "/C=BR/ST=PR/L=Curitiba/O=Security/OU=DevSecOps/CN=*.labs.sec4us.com.br" -out /tmp/admin.csr
+       
+    openssl x509 -req -in /tmp/admin.csr -CA /etc/nginx/certs/root-ca.pem -CAkey /etc/nginx/certs/root-ca-key.pem -CAcreateserial -sha256 -out /etc/nginx/certs/ssl.cer -days 730
 
 

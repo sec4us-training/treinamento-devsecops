@@ -85,7 +85,8 @@
               restart: always
               hostname: '{{ gitlab_host }}'
               environment:
-                GITLAB_OMNIBUS_CONFIG: |
+                - TZ: America/Sao_Paulo
+                - GITLAB_OMNIBUS_CONFIG: |
                   external_url 'https://{{ gitlab_host }}'
                   gitlab_rails['gitlab_shell_ssh_port'] = 22
                   nginx['enable'] = false
@@ -186,6 +187,21 @@
       changed_when: true
       no_log: true
 
+    - name: Disable Auto DevOps globally (instance level)
+      ansible.builtin.uri:
+        url: "https://{{ gitlab_host }}/api/v4/application/settings"
+        method: PUT
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          auto_devops_enabled: false
+        status_code: [200]
+        validate_certs: false
+      register: gitlab_settings
+      no_log: true
+
     - name: GitLab | Store credentials
       ansible.builtin.uri:
         url: "https://{{ vault_host }}/v1/secret/gitlab/admin"
@@ -194,11 +210,10 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            url: "https://{{ gitlab_host }}"
-            username: "root"
-            password: "{{ gitlab_root_password }}"
-            personal_token: "{{ gitlab_root_token }}"
+          url: "https://{{ gitlab_host }}"
+          username: "root"
+          password: "{{ gitlab_root_password }}"
+          personal_token: "{{ gitlab_root_token }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true

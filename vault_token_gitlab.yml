@@ -9,6 +9,6 @@
   register: read_secret
   no_log: true
 
-- name: "Set data to API1"
+- name: "Set data"
   set_fact:
-    gitlab_admin_token: "{{ read_secret.json.data.data.personal_token }}"
+    gitlab_admin_token: "{{ read_secret.json.data.personal_token }}"

@@ -78,6 +78,7 @@
                 - "9000:9000"
 
               environment:
+                TZ: America/Sao_Paulo
                 SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
                 SONAR_JDBC_USERNAME: sonar
                 SONAR_JDBC_PASSWORD: sonar

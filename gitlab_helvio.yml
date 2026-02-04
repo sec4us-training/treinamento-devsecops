@@ -61,10 +61,9 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            url: "https://{{ gitlab_host }}"
-            username: "helvio"
-            personal_token: "{{ gitlab_token }}"
+          url: "https://{{ gitlab_host }}"
+          username: "helvio"
+          personal_token: "{{ gitlab_token }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true

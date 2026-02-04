@@ -23,9 +23,8 @@
           X-Vault-Token: "{{ vault_token }}"
         body_format: json
         body:
-          data:
-            db_user: "bank"
-            db_pass: "123456"
+          db_user: "bank"
+          db_pass: "123456"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
@@ -211,73 +210,47 @@
           charset = utf8
           autocommit = False
 
-    - name: Creatting Jenkins file
-      copy:
-        dest: "/tmp/bank_git/config.ini"
-        force: yes
+    - name: Creating Jenkinsfile
+      ansible.builtin.copy:
+        dest: "/tmp/bank_git/Jenkinsfile"
+        force: true
         content: |
-          node {
-              stage('Checkout') {
-                  checkout([
-                      $class: 'GitSCM',
-                      branches: [[name: '*/main']],
-                      userRemoteConfigs: [[
-                          url: 'https://{{gitlab_host}}:sec4us/bank.git',
-                          credentialsId: 'gitlab-gitscm'
-                      ]]
-                  ])
-              }
+          {% raw %}node {
+            stage('Checkout') {
+              checkout([
+                $class: 'GitSCM',
+                branches: [[name: '*/main']],
+                userRemoteConfigs: [[
+                  url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
+                  credentialsId: 'gitlab-gitscm'
+                ]]
+              ])
+            }
 
-              /*
-              stage('Gradle + SonarQube') {
-                  withSonarQubeEnv('sonarqube') {
-                      sh './gradlew clean sonarqube'
-                  }
-              }
+            stage('Build com segredos do Vault') {
+              def secrets = [[
+                path: 'secret/bank',
+                engineVersion: 1,
+                secretValues: [
+                  [envVar: 'DB_USER', vaultKey: 'db_user'],
+                  [envVar: 'DB_PASS', vaultKey: 'db_pass']
+                ]
+              ]]
 
-              stage('Quality Gate') {
-                  timeout(time: 10, unit: 'MINUTES') {
-                      def qg = waitForQualityGate()
-                      if (qg.status != 'OK') {
-                          error "Quality Gate failed: ${qg.status}"
-                      }
-                  }
-              }
-              */
+              def configuration = [vaultUrl: 'https://{% endraw %}{{ vault_host }}{% raw %}',
+                         vaultCredentialId: 'vault',
+                         engineVersion: 1]
 
-              stage('Build com segredos do Vault') {
-                steps {
-                  script {
-                    def secrets = [
-                      [
-                        path: 'kv/secret/bank',
-                        engineVersion: 2,
-                        secretValues: [
-                          [envVar: 'DB_USER', vaultKey: 'db_user'],
-                          [envVar: 'DB_PASS', vaultKey: 'db_pass']
-                        ]
-                      ]
-                    ]
-
-                    // Usa config global do Vault (url etc.) e autentica via credencial do Jenkins
-                    withVault(
-                      vaultSecrets: secrets,
-                      vaultCredentialId: 'vault',
-                      vaultUrl: 'https://{{vault_host}}:8200'
-                    ) {
-                      sh '''
-                        set +x
-                        echo "Rodando build..."
-                        
-                        echo "Conectando ao banco de dados ${DB_USER} com a senha ${DB_PASS}"
-
-                      '''
-                    }
-                  }
-                }
+              withVault([configuration: configuration, vaultSecrets: secrets]) {
+                sh '''
+                  set +x
+                  echo "Rodando build..."
+                  echo "DB_USER: ${DB_USER}"
+                  echo "DB_PASS: ${DB_PASS}"
+                '''
               }
             }
-          }
+          }{% endraw %}
 
 
     - name: GitLab | Commit
