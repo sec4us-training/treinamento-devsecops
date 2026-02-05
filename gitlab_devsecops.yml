@@ -1,0 +1,68 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    GITLAB_HOME: /u01/gitlab
+    gitlab_external_url: 
+    gitlab_api_version: 
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+    - include_tasks: 'vault_token_gitlab.yml'
+
+    
+    - name: GitLab | Set project name
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "devsecops"
+
+    - name: GitLab | List existing projects
+      uri:
+        url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects"
+        method: "GET"
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        validate_certs: false
+        return_content: true
+      register: projects_list_output
+
+    - name: "Check if project is already exists"
+      set_fact:
+        project_exists: "{{ gitlab_project_group + '/' + gitlab_project_name in\
+          (projects_list_output.json | map(attribute='path_with_namespace')  | list) }}"
+
+    - name: GitLab | Get project ID
+      set_fact:
+        gitlab_project_id: "{{ item.id }}"
+      loop: "{{ projects_list_output.json }}"
+      when:
+        - project_exists
+        - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
+      no_log: true
+
+
+    - name: GitLab | Create CI/CD variable (project level)
+      ansible.builtin.uri:
+        url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        body_format: form-urlencoded
+        body:
+          key: "FAKE_SECRET_TOKEN_H2"
+          value: "MeuTokenSuperSecreto"
+          variable_type: "env_var"
+          environment_scope: "*"
+          protected: true
+          masked_and_hidden: true
+          raw: true
+          description: "DevSecOps fake secret token"
+        status_code: [201, 400, 409]
+        validate_certs: false
+      register: create_var
+      no_log: true
