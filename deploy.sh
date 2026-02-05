@@ -409,7 +409,7 @@ fi
 echo -e "\n${OK} Executando passo 11 gitlab_bank.yml"
 grep "gitlab_bank" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 10...${W}"
+    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
 else
     ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_bank.yml
     if [ "$?" != "0" ]; then
@@ -421,6 +421,22 @@ else
     echo -e "${OK} ${G}OK${W}"
 fi
 
+
+# Step 12 - Create gitlab runner
+echo -e "\n${OK} Executando passo 12 gitlab_runner.yml"
+grep "gitlab_runner" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 12...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_runner.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible gitlab_runner${W}\n"
+        info
+        exit 1
+    fi
+    echo "gitlab_runner" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
 
 popd
 
