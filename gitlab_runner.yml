@@ -148,9 +148,7 @@
         content: |
           services:
             gitlab-runner:
-              build:
-                context: .
-                dockerfile: Dockerfile
+              image: registry.labs.sec4us.com.br/ci/linux_runner:lts
               container_name: gitlab-runner
               restart: always
 
