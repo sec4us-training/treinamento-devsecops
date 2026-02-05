@@ -167,6 +167,14 @@
       shell: |
         rsync -a {{ git_dir_path }}/* {{ WEB_HOME }}/data/.git
 
+    - name: Web01 | Deploy to gitlab
+      shell: |
+        cd {{ WEB_HOME }}/data/
+        git remote remove origin || true
+        git remote add origin git@{{gitlab_host}}:sec4us/devsecops.git
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
+      ignore_errors: false
+
     - name: Web01 | Creating docker-compose.yml
       copy:
         dest: "{{ WEB_HOME }}/docker-compose.yml"
@@ -175,7 +183,7 @@
             apache:
               image: httpd:2.4
               container_name: apache-web01
-              restart: unless-stopped
+              restart: always
 
               ports:
                 - "8054:80"

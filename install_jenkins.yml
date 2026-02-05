@@ -104,6 +104,8 @@
 
           USER root
 
+          ENV DEBIAN_FRONTEND=noninteractive
+
           COPY ssh_keys/id_rsa* $JENKINS_HOME/.ssh/
 
           COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
@@ -114,6 +116,9 @@
             -file /usr/local/share/ca-certificates/root-ca.crt \
             -keystore "$JAVA_HOME/lib/security/cacerts" \
             -storepass changeit
+
+          RUN apt update && \
+            apt install -y wget curl rsync 
 
           USER jenkins
 
@@ -133,7 +138,7 @@
                 context: .
                 dockerfile: Dockerfile
               container_name: jenkins
-              restart: unless-stopped
+              restart: always
 
               # Permite rodar builds que usam docker no host via /var/run/docker.sock
               user: "0:0"
@@ -210,7 +215,6 @@
       command: >
         docker exec jenkins bash -lc
         "update-ca-certificates"
-      register: jenkins_password_raw
       changed_when: false
 
     - name: Jenkins | Wait for admin password

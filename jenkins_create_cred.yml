@@ -10,6 +10,9 @@
     return_content: yes
     status_code: 200
   register: crumb_json
+  retries: 60
+  delay: 10
+  until: crumb_json.status == 200
 
 - name: Jenkins | Build CSRF header
   set_fact:
@@ -24,7 +27,6 @@
 - name: Jenkins | Create gitlab in global domain
   ansible.builtin.uri:
     url: "https://{{ jenkins_host }}/credentials/store/system/domain/_/createCredentials"
-    #url: "https://webhook.site/686def12-6e88-4a07-9e0c-c146a54126b9"
     method: POST
     user: "admin"
     password: "{{ jenkins_admin_password }}"
@@ -37,6 +39,9 @@
     status_code: [200, 201, 204, 409, 302]
     validate_certs: false
   register: create_cred
+  retries: 60
+  delay: 10
+  until: create_cred.status == 200 or create_cred.status == 201 or create_cred.status == 204 or create_cred.status == 409 or create_cred.status == 302 
   no_log: true
 
 - name: Jenkins | Check if credential exists

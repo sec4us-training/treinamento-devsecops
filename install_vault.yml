@@ -80,7 +80,7 @@
         dest: "{{ vault_home }}/unseal.sh"
         mode: 0777
         content: |
-          #!/bin/sh
+          {% raw %}#!/bin/sh
           set -eu
 
           VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
@@ -116,7 +116,7 @@
 
               # Extrai N chaves do init.json (sem depender de jq)
               # Assumindo que init.json tem "unseal_keys_b64": ["k1","k2",...]
-              KEYS="$(sed -n 's/.*"unseal_keys_b64":[[:space:]]*\[\(.*\)\].*/\1/p' "$INIT_JSON" | tr -d ' ' | tr ',' '\n' | tr -d '"')"
+              KEYS="$(sed -n '/"unseal_keys_b64"/,/\]/p' $INIT_JSON | sed -n 's/.*"\(.*\)".*/\1/p' | grep -v 'unseal_keys_b64')"
 
               n=0
               echo "$KEYS" | while IFS= read -r key; do
@@ -136,7 +136,7 @@
           fi
 
           # Mantém o vault server no foreground
-          wait "$VAULT_PID"
+          wait "$VAULT_PID"{% endraw %}
 
     - name: Vault | Creating docker-compose.yml
       copy:
@@ -146,7 +146,7 @@
             vault:
               image: hashicorp/vault:1.20
               container_name: vault
-              restart: unless-stopped
+              restart: always
 
               ports:
                 - "8200:8200"
@@ -314,6 +314,18 @@
           -e VAULT_TOKEN='{{ vault_token }}' \
           vault sh -lc 'vault secrets enable -path=secret kv'
       changed_when: false
+      ignore_errors: true
+
+    - name: Vault | Delete test key (KV v2)
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/devsecops/test_secret"
+        method: DELETE
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+      ignore_errors: true
 
     - name: Vault | Create a test key (KV v2 via HTTP API)
       ansible.builtin.uri:
@@ -344,6 +356,16 @@
       ansible.builtin.debug:
         msg:
           username: "User: {{ read_secret.json.data.username }}, Pass: {{ read_secret.json.data.password }}"
+
+    - name: Vault | Delete test key (KV v2)
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/devsecops/test_secret"
+        method: DELETE
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
 
     - name: Read SSH key from controller
       ansible.builtin.set_fact:

@@ -3,9 +3,6 @@
   become: yes
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
-    GITLAB_HOME: /u01/gitlab
-    gitlab_external_url: 
-    gitlab_api_version: 
 
   vars_files:
     - vars.yml
@@ -232,3 +229,11 @@
 
     - include_tasks: "create_user_sshkey.yml"
 
+    - name: "Set data"
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "devsecops"
+      no_log: true
+
+    - include_tasks: "create_group.yml"
+    - include_tasks: "create_project.yml"

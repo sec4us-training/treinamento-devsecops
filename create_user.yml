@@ -70,7 +70,7 @@
     method: "POST"
     headers:
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
-    body: "user_id={{ gitlab_user_id }}&access_level=30"
+    body: "user_id={{ gitlab_user_id }}&access_level=40" # access_level=40 -> Maintainer
     body_format: raw
     validate_certs: false
     return_content: true

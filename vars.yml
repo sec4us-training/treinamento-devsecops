@@ -23,3 +23,6 @@ repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
 repo_branch: "*/main"
 script_path: "Jenkinsfile"
 credentials_id: "gitlab-gitscm"
+
+# Info Gitlab
+GITLAB_HOME: /u01/gitlab

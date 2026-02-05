@@ -72,7 +72,7 @@
               container_name: sonarqube
               depends_on:
                 - db
-              restart: unless-stopped
+              restart: always
 
               ports:
                 - "9000:9000"

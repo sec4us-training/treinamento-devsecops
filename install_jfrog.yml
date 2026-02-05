@@ -83,7 +83,7 @@
             postgres:
               image: postgres:13-alpine
               container_name: jfrog-postgres
-              restart: unless-stopped
+              restart: always
               environment:
                 TZ: America/Sao_Paulo
                 POSTGRES_DB: artifactory
