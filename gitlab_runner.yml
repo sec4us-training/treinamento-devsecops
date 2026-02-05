@@ -132,7 +132,7 @@
           RUN update-ca-certificates
 
           RUN apt update && \
-            apt install -y ca-certificates gnupg wget curl rsync 
+            apt install -y ca-certificates gnupg wget curl rsync jq zip 
 
           USER root
 
