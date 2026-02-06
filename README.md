@@ -12,7 +12,8 @@ Conheça mais sobre nosso treinamento em: https://sec4us.com.br/treinamentos/dev
 
 ## Ambiente
 
-> **Nota:** O "alvo" servidor de deploy, deve ser um ubuntu linux e todos os seus dados poderão ser destruidos, sendo assim NÃO execute este procedimento em um servidor com dados que não podem ser perdidos.
+> [!WARNING] 
+> O "alvo" servidor de deploy, deve ser um ubuntu linux e todos os seus dados poderão ser destruidos, sendo assim NÃO execute este procedimento em um servidor com dados que não podem ser perdidos.
 
 O servidor (ou alvo) deve ser um Ubuntu Linux que será o alvo de todo o procedimento de instalação. Recomenda-se que o servidor seja um Ubuntu Linux 22.04 ou superior, recentemente instalado e sem nenhuma informação que possa ser perdida, pois o procedimento de instalação é bem invasivo e irá reconfigurar diversos serviços do servidor.
 
@@ -42,4 +43,5 @@ apt install wget
 wget --no-cache -q -O- https://raw.githubusercontent.com/sec4us-training/treinamento-devsecops/main/deploy.sh | sudo bash
 ```
 
-**Nota:** o script deploy.sh irá executar todos o processo de deploy dos arquivos .yml, sendo assim NÃO precisa executar manualmente cada um deles.
+> [!NOTE]
+> O script deploy.sh irá executar todos o processo de deploy dos arquivos .yml, sendo assim NÃO precisa executar manualmente cada um deles.

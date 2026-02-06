@@ -118,7 +118,7 @@
             -storepass changeit
 
           RUN apt update && \
-            apt install -y wget curl rsync 
+            apt install -y ca-certificates gnupg wget curl rsync jq zip 
 
           USER jenkins
 
@@ -134,9 +134,7 @@
         content: |
           services:
             jenkins:
-              build:
-                context: .
-                dockerfile: Dockerfile
+              image: 'registry.labs.sec4us.com.br/ci/jenkins:lts'
               container_name: jenkins
               restart: always
 
