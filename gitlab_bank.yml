@@ -215,39 +215,59 @@
         dest: "/tmp/bank_git/Jenkinsfile"
         force: true
         content: |
-          {% raw %}node {
-            stage('Checkout') {
-              checkout([
-                $class: 'GitSCM',
-                branches: [[name: '*/main']],
-                userRemoteConfigs: [[
-                  url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
-                  credentialsId: '{% endraw %}{{credentials_id}}{% raw %}'
-                ]]
-              ])
+          {% raw %}pipeline {
+            agent any
+
+            stages {
+              stage('Checkout') {
+                steps {
+                  checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[
+                      url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
+                      credentialsId: '{% endraw %}{{credentials_id}}{% raw %}'
+                    ]]
+                  ])
+                }
+              }
+
+              stage('Build com segredos do Vault') {
+                steps {
+                  script {
+                    def secrets = [[
+                      path: 'secret/bank',
+                      engineVersion: 1,
+                      secretValues: [
+                        [envVar: 'DB_USER', vaultKey: 'db_user'],
+                        [envVar: 'DB_PASS', vaultKey: 'db_pass']
+                      ]
+                    ]]
+
+                    def configuration = [
+                      vaultUrl: 'https://{% endraw %}{{ vault_host }}{% raw %}',
+                      vaultCredentialId: 'vault',
+                      engineVersion: 1
+                    ]
+
+                    withVault([configuration: configuration, vaultSecrets: secrets]) {
+                      sh '''
+                        set +x
+                        echo "Rodando build..."
+                        echo "DB_USER: ${DB_USER}"
+                        echo "DB_PASS: ${DB_PASS}"
+                      '''
+                    }
+                  }
+                }
+              }
             }
 
-            stage('Build com segredos do Vault') {
-              def secrets = [[
-                path: 'secret/bank',
-                engineVersion: 1,
-                secretValues: [
-                  [envVar: 'DB_USER', vaultKey: 'db_user'],
-                  [envVar: 'DB_PASS', vaultKey: 'db_pass']
-                ]
-              ]]
-
-              def configuration = [vaultUrl: 'https://{% endraw %}{{ vault_host }}{% raw %}',
-                         vaultCredentialId: 'vault',
-                         engineVersion: 1]
-
-              withVault([configuration: configuration, vaultSecrets: secrets]) {
-                sh '''
-                  set +x
-                  echo "Rodando build..."
-                  echo "DB_USER: ${DB_USER}"
-                  echo "DB_PASS: ${DB_PASS}"
-                '''
+            post {
+              always {
+                echo "final steps"
+                // Recomendo manter limpeza
+                // cleanWs(deleteDirs: true, notFailBuild: true, disableDeferredWipeout: true)
               }
             }
           }{% endraw %}
