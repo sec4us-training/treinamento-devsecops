@@ -140,7 +140,7 @@
 
     - name: GitLab | Registry docker image
       shell: |
-        cd {{ runner_home }}
+        cd {{ JENKINS_HOME }}
         docker push registry.labs.sec4us.com.br/ci/jenkins:lts
 
     - name: Jenkins | Creating docker-compose.yml
