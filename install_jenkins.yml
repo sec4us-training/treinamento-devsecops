@@ -77,8 +77,9 @@
         group: "root"
         mode: 0777
       with_items:
-          - { path: "{{ JENKINS_HOME }}" }  
-          - { path: "{{ JENKINS_HOME }}/ssh_keys" }    
+          - { path: "{{ JENKINS_HOME }}" }
+          - { path: "{{ JENKINS_HOME }}/home/" }     
+          - { path: "{{ JENKINS_HOME }}/home/.ssh/" }    
 
     - name: Jenkins | Copy CA root cert
       copy:
@@ -90,7 +91,7 @@
     - name: Jenkins | Copy SSH keys
       copy:
         src: "{{ item }}"
-        dest: "{{ JENKINS_HOME }}/ssh_keys"
+        dest: "{{ JENKINS_HOME }}/home/.ssh/"
         owner: "root"
         group: "root"
       with_fileglob:
@@ -178,7 +179,7 @@
               volumes:
                 # Dados persistentes do Jenkins
                 - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
-                - {{JENKINS_HOME}}:/var/jenkins_home
+                - {{JENKINS_HOME}}/home:/var/jenkins_home
 
                 # Acesso ao Docker do host (Docker-outside-of-Docker)
                 - /var/run/docker.sock:/var/run/docker.sock
