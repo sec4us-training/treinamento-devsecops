@@ -138,7 +138,7 @@
         cd {{ JENKINS_HOME }}
         docker build -t registry.labs.sec4us.com.br/ci/jenkins:lts .
 
-    - name: GitLab | Registry docker image
+    - name: Jenkins | Registry docker image
       shell: |
         cd {{ JENKINS_HOME }}
         docker push registry.labs.sec4us.com.br/ci/jenkins:lts
