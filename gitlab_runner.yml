@@ -52,8 +52,9 @@
         mode: 0777
       with_items:
           - { path: "{{ runner_home }}" }  
+          - { path: "{{ runner_home }}/ssh_keys" }  
 
-    - name: Jenkins | Copy SSH keys
+    - name: GitLab | Copy SSH keys
       copy:
         src: "{{ item }}"
         dest: "{{ runner_home }}/ssh_keys"
@@ -129,27 +130,49 @@
       copy:
         dest: "{{ runner_home }}/Dockerfile"
         content: |
-          FROM gitlab/gitlab-runner:latest
+          {% raw %}FROM gitlab/gitlab-runner:latest
 
           USER root
 
           ENV DEBIAN_FRONTEND=noninteractive
           ENV CA_CERTIFICATES_PATH=/etc/gitlab-runner/certs/
           
+          RUN mkdir -p /root/.ssh/ || true
           COPY ssh_keys/id_rsa* /root/.ssh/
           COPY root-ca.crt /etc/gitlab-runner/certs/ca.crt
           COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
           RUN update-ca-certificates
 
           RUN apt update && \
-            apt install -y ca-certificates gnupg wget curl rsync jq zip 
+            apt install -y \
+            ca-certificates \
+            gnupg \
+            wget \
+            curl \
+            rsync \
+            jq \
+            zip \
+            lsb-release
+          
+          RUN install -m 0755 -d /etc/apt/keyrings && \
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+            | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+            chmod a+r /etc/apt/keyrings/docker.gpg && \
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+            apt update && \
+            apt install -y docker-ce-cli
 
           USER root
+          {% endraw %}
 
     - name: GitLab | Build docker image
       shell: |
         cd {{ runner_home }}
         docker build -t registry.labs.sec4us.com.br/ci/linux_runner:lts .
+
+    - name: GitLab | Registry docker image
+      shell: |
+        cd {{ runner_home }}
         docker push registry.labs.sec4us.com.br/ci/linux_runner:lts
 
     - name: GitLab | Creating docker-compose.yml
@@ -161,6 +184,9 @@
               image: registry.labs.sec4us.com.br/ci/linux_runner:lts
               container_name: gitlab-runner
               restart: always
+
+              # Permite rodar builds que usam docker no host via /var/run/docker.sock
+              user: "0:0"
 
               extra_hosts:
                 - "{{vault_host}}:host-gateway"
@@ -180,6 +206,9 @@
               volumes:
                 - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
                 - {{ runner_home }}/config.toml:/etc/gitlab-runner/config.toml:ro
+
+                # Acesso ao Docker do host (Docker-outside-of-Docker)
+                - /var/run/docker.sock:/var/run/docker.sock
 
     - name: GitLab | Start service
       shell: |
