@@ -107,7 +107,7 @@
 
           ENV DEBIAN_FRONTEND=noninteractive
 
-          COPY ssh_keys/id_rsa* $JENKINS_HOME/.ssh/
+          COPY home/.ssh/id_rsa* $JENKINS_HOME/.ssh/
 
           COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
           RUN update-ca-certificates
