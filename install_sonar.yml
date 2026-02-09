@@ -67,13 +67,63 @@
           - { path: "{{ SONAR_HOME }}/sonarqube/extensions" }
           - { path: "{{ SONAR_HOME }}/sonarqube/logs" }
 
+    - name: Sonar | Copy CA root cert
+      copy:
+        src: "/etc/nginx/certs/root-ca.pem"
+        dest: "{{ SONAR_HOME }}/root-ca.crt"
+        owner: "root"
+        group: "root"
+
+    - name: Sonar | Creating Dockerfile
+      copy:
+        dest: "{{ SONAR_HOME }}/Dockerfile"
+        content: |
+          {% raw %}FROM sonarqube:community
+
+          USER root
+
+          ENV DEBIAN_FRONTEND=noninteractive
+
+          COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
+          RUN update-ca-certificates
+
+          RUN keytool -importcert -noprompt \
+            -alias root-ca \
+            -file /usr/local/share/ca-certificates/root-ca.crt \
+            -keystore "$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit
+
+          RUN apt update && \
+            apt install -y \
+            ca-certificates \
+            gnupg \
+            wget \
+            curl \
+            rsync \
+            jq \
+            zip \
+            lsb-release
+          
+          USER sonarqube
+          {% endraw %}
+
+    - name: Sonar | Build docker image
+      shell: |
+        cd {{ SONAR_HOME }}
+        docker build -t registry.labs.sec4us.com.br/ci/sonarqube:sec4us .
+
+    - name: Sonar | Registry docker image
+      shell: |
+        cd {{ SONAR_HOME }}
+        docker push registry.labs.sec4us.com.br/ci/sonarqube:sec4us
+
     - name: Sonar | Creating docker-compose.yml
       copy:
         dest: "{{ SONAR_HOME }}/docker-compose.yml"
         content: |
           services:
             sonarqube:
-              image: sonarqube:community
+              image: registry.labs.sec4us.com.br/ci/sonarqube:sec4us
               container_name: sonarqube
               depends_on:
                 - db
