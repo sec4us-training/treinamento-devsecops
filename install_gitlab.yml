@@ -94,6 +94,15 @@
                 - '8180:8180'
                 - '2222:22'
 
+              extra_hosts:
+                - "{{vault_host}}:host-gateway"
+                - "{{gitlab_host}}:host-gateway"
+                - "{{artifactory_host}}:host-gateway"
+                - "{{jenkins_host}}:host-gateway"
+                - "{{sonar_host}}:host-gateway"
+                - "{{web01_host}}:host-gateway"
+                - "{{registry_host}}:host-gateway"
+
               volumes:
                 - '{{ GITLAB_HOME }}/config:/etc/gitlab'
                 - '{{ GITLAB_HOME }}/logs:/var/log/gitlab'

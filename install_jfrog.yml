@@ -106,6 +106,15 @@
                 - "8081:8081"   # Artifactory UI / API
                 - "8082:8082"   # (opcional, alguns repos usam)
 
+              extra_hosts:
+                - "{{vault_host}}:host-gateway"
+                - "{{gitlab_host}}:host-gateway"
+                - "{{artifactory_host}}:host-gateway"
+                - "{{jenkins_host}}:host-gateway"
+                - "{{sonar_host}}:host-gateway"
+                - "{{web01_host}}:host-gateway"
+                - "{{registry_host}}:host-gateway"
+
               volumes:
                 - {{ ARTIFACTORY_HOME }}/artifactory:/var/opt/jfrog/artifactory
 
