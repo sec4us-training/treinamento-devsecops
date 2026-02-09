@@ -26,7 +26,8 @@
       - jfrog
       - hashicorp-vault-plugin
       - sonar
-
+      - sonar-quality-gates
+      
   vars_files:
     - vars.yml
 
