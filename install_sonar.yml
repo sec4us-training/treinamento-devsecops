@@ -116,6 +116,19 @@
         state: present
         reload: true
 
+    - name: Ensure fs.file-max for SonarQube
+      become: true
+      ansible.posix.sysctl:
+        name: fs.file-max
+        value: "131072"
+        state: present
+        reload: true
+
+    - name: Sonar | Adjusting ulimit
+      shell: |
+        ulimit -n 131072
+        ulimit -u 8192
+
     - name: Sonar | Start service
       shell: |
         cd {{ SONAR_HOME }}
