@@ -4,9 +4,8 @@
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
     SONAR_HOME: /u01/sonar
-    jfrog_url: "http://127.0.0.1:8082"           # Router/Access
-    jfrog_admin_user: "admin"
-    jfrog_admin_current_password: "password"
+    sonar_admin_user: "admin"
+    sonar_admin_old_password: "admin"
 
   vars_files:
     - vars.yml
@@ -128,4 +127,90 @@
       until: sonar_running.stdout == "true"
       changed_when: false
 
+    - name: Jenkins | Wait for port 9000
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9000
+        delay: 10
+        timeout: 300
 
+    - name: Sonar | Wait for SonarQube to be reachable
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/system/status"
+        method: GET
+        return_content: true
+        status_code: [200]
+        validate_certs: false
+      register: sonar_status
+      retries: 60
+      delay: 5
+      until: sonar_status.status == 200
+
+    - name: Sonar | Check if default credentials still work (admin/admin)
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/authentication/validate"
+        method: GET
+        user: "{{ sonar_admin_user }}"
+        password: "{{ sonar_admin_old_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: [200, 401, 403]
+        validate_certs: false
+      register: sonar_auth
+
+    - name: Sonar | Generating admin password
+      set_fact:
+        sonar_admin_new_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+
+    - name: Sonar | Change admin password (only when admin/admin is valid)
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/users/change_password"
+        method: POST
+        user: "{{ sonar_admin_user }}"
+        password: "{{ sonar_admin_old_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          login: "{{ sonar_admin_user }}"
+          previousPassword: "{{ sonar_admin_old_password }}"
+          password: "{{ sonar_admin_new_password }}"
+        status_code: [200, 204]
+        validate_certs: false
+      when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+
+    - name: Sonar | Verify new password works
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/authentication/validate"
+        method: GET
+        user: "{{ sonar_admin_user }}"
+        password: "{{ sonar_admin_new_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: [200]
+        validate_certs: false
+      register: sonar_auth_new
+      when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+
+    - name: Sonar | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/sonarqube/admin"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          url: "https://{{ vault_host }}"
+          username: "{{ sonar_admin_user }}"
+          password: "{{ sonar_admin_new_password }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+
+    - name: Sonar | Show result
+      ansible.builtin.debug:
+        msg: >-
+          Password changed: {{
+            (sonar_auth_new.json.valid | default(false))
+            if (sonar_auth_new is defined) else
+            'skipped (admin/admin not valid or already changed)'
+          }}
