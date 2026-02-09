@@ -99,6 +99,7 @@
               restart: always
 
               environment:
+                TZ: America/Sao_Paulo
                 POSTGRES_USER: sonar
                 POSTGRES_PASSWORD: sonar
                 POSTGRES_DB: sonar
