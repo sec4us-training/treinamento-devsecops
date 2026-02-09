@@ -27,7 +27,7 @@
       - hashicorp-vault-plugin
       - sonar
       - sonar-quality-gates
-      
+
   vars_files:
     - vars.yml
 
@@ -130,10 +130,8 @@
             zip \
             lsb-release
           
-          USER root
-          {% endraw %}
-
           USER jenkins
+          {% endraw %}
 
     - name: Jenkins | Build docker image
       shell: |
