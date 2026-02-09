@@ -61,8 +61,8 @@
       with_items:
           - { path: "{{ SONAR_HOME }}" }
           - { path: "{{ SONAR_HOME }}/postgresql" }
-          - { path: "{{ SONAR_HOME }}/sonarqube" }
           - { path: "{{ SONAR_HOME }}/postgresql/data" }
+          - { path: "{{ SONAR_HOME }}/sonarqube" }
           - { path: "{{ SONAR_HOME }}/sonarqube/data" }
           - { path: "{{ SONAR_HOME }}/sonarqube/extensions" }
           - { path: "{{ SONAR_HOME }}/sonarqube/logs" }
