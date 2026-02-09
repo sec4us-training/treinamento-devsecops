@@ -78,6 +78,14 @@
               depends_on:
                 - db
               restart: always
+    
+              ulimits:
+                nofile:
+                  soft: 131072
+                  hard: 131072
+                nproc:
+                  soft: 8192
+                  hard: 8192
 
               ports:
                 - "9000:9000"
@@ -123,11 +131,6 @@
         value: "131072"
         state: present
         reload: true
-
-    - name: Sonar | Adjusting ulimit
-      shell: |
-        ulimit -n 131072
-        ulimit -u 8192
 
     - name: Sonar | Start service
       shell: |
