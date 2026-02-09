@@ -181,10 +181,21 @@
 
     - name: Sonar | Generating admin password
       set_fact:
-        sonar_admin_new_password:  >-
-          {{ lookup('community.general.random_string',
-                    length=20, upper=True, lower=True, numbers=True, special=False)
-          }}{{ ['!','@','#','%','&','*','?','_','-'] | random }}
+        sonar_admin_new_password: >-
+          {{
+            (
+              lookup('community.general.random_string',
+                     length=19,
+                     upper=True,
+                     lower=True,
+                     numbers=True,
+                     special=False)
+              + (['!','@','#','&','*','_','-','.'] | random)
+            )
+            | list
+            | shuffle
+            | join('')
+          }}
 
     - name: Sonar | Change admin password (only when admin/admin is valid)
       ansible.builtin.uri:
@@ -229,6 +240,7 @@
         validate_certs: false
         status_code: [200, 204]
       no_log: true
+      when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
 
     - name: Sonar | Show result
       ansible.builtin.debug:
