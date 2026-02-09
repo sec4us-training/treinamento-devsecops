@@ -60,6 +60,12 @@
         mode: 0777
       with_items:
           - { path: "{{ SONAR_HOME }}" }
+          - { path: "{{ SONAR_HOME }}/postgresql" }
+          - { path: "{{ SONAR_HOME }}/sonarqube" }
+          - { path: "{{ SONAR_HOME }}/postgresql/data" }
+          - { path: "{{ SONAR_HOME }}/sonarqube/data" }
+          - { path: "{{ SONAR_HOME }}/sonarqube/extensions" }
+          - { path: "{{ SONAR_HOME }}/sonarqube/logs" }
 
     - name: Sonar | Creating docker-compose.yml
       copy:
@@ -67,7 +73,7 @@
         content: |
           services:
             sonarqube:
-              image: sonarqube:lts-community
+              image: sonarqube:community
               container_name: sonarqube
               depends_on:
                 - db
@@ -83,14 +89,14 @@
                 SONAR_JDBC_PASSWORD: sonar
 
               volumes:
-                - sonarqube_data:/opt/sonarqube/data
-                - sonarqube_extensions:/opt/sonarqube/extensions
-                - sonarqube_logs:/opt/sonarqube/logs
+                - {{ SONAR_HOME }}/sonarqube/data:/opt/sonarqube/data
+                - {{ SONAR_HOME }}/sonarqube/extensions:/opt/sonarqube/extensions
+                - {{ SONAR_HOME }}/sonarqube/logs:/opt/sonarqube/logs
 
             db:
               image: postgres:15
               container_name: sonarqube-db
-              restart: unless-stopped
+              restart: always
 
               environment:
                 POSTGRES_USER: sonar
@@ -98,13 +104,8 @@
                 POSTGRES_DB: sonar
 
               volumes:
-                - postgresql_data:/var/lib/postgresql/data
+                - {{ SONAR_HOME }}/postgresql/data:/var/lib/postgresql/data
 
-          volumes:
-            sonarqube_data:
-            sonarqube_extensions:
-            sonarqube_logs:
-            postgresql_data:
 
     - name: Ensure vm.max_map_count for SonarQube
       become: true
@@ -127,7 +128,7 @@
       until: sonar_running.stdout == "true"
       changed_when: false
 
-    - name: Jenkins | Wait for port 9000
+    - name: Sonar | Wait for port 9000
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 9000
@@ -157,10 +158,16 @@
         status_code: [200, 401, 403]
         validate_certs: false
       register: sonar_auth
+      retries: 60
+      delay: 5
+      until: sonar_auth.status == 200 or sonar_auth.status == 401 or sonar_auth.status == 403
 
     - name: Sonar | Generating admin password
       set_fact:
-        sonar_admin_new_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+        sonar_admin_new_password:  >-
+          {{ lookup('community.general.random_string',
+                    length=20, upper=True, lower=True, numbers=True, special=False)
+          }}{{ ['!','@','#','%','&','*','?','_','-'] | random }}
 
     - name: Sonar | Change admin password (only when admin/admin is valid)
       ansible.builtin.uri:
