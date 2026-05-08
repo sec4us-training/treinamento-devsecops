@@ -56,7 +56,7 @@
 
     - name: GitLab | Copy SSH keys
       copy:
-        src: "{{ item }}"
+        remote_src: "{{ item }}"
         dest: "{{ runner_home }}/ssh_keys"
         owner: "root"
         group: "root"
@@ -65,7 +65,7 @@
 
     - name: GitLab | Copy CA root cert
       copy:
-        src: "/etc/nginx/certs/root-ca.pem"
+        remote_src: "/etc/nginx/certs/root-ca.pem"
         dest: "{{ runner_home }}/root-ca.crt"
         owner: "root"
         group: "root"

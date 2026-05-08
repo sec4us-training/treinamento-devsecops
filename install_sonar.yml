@@ -69,7 +69,7 @@
 
     - name: Sonar | Copy CA root cert
       copy:
-        src: "/etc/nginx/certs/root-ca.pem"
+        remote_src: "/etc/nginx/certs/root-ca.pem"
         dest: "{{ SONAR_HOME }}/root-ca.crt"
         owner: "root"
         group: "root"

@@ -84,14 +84,14 @@
 
     - name: Jenkins | Copy CA root cert
       copy:
-        src: "/etc/nginx/certs/root-ca.pem"
+        remote_src: "/etc/nginx/certs/root-ca.pem"
         dest: "{{ JENKINS_HOME }}/root-ca.crt"
         owner: "root"
         group: "root"
 
     - name: Jenkins | Copy SSH keys
       copy:
-        src: "{{ item }}"
+        remote_src: "{{ item }}"
         dest: "{{ JENKINS_HOME }}/home/.ssh/"
         owner: "root"
         group: "root"
