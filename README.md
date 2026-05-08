@@ -1,19 +1,26 @@
-# DevSecOps - Training Labs
+# Treinamento DevOps Ecosystem Exploits
 
-## Copyright © Sec4US®
+Este arquivo tem por objetivo catalogar os comandos utilizados durante o treinamento
 
-Todos os direitos reservados. Nenhuma parte dos materiais disponibilizadas, incluindo este repositório, scripts, servidor, suas aplicações e seu código fonte, podem ser redistribuídas, sublicenciadas, transmitidas, alteradas, comercializadas ou utilizadas para trabalhos sem a autorização por escrito da Sec4US
+## Copyright
+
+Arquivo pertencente ao treinamento de DevOps Ecosystem Exploits
+Autor: Sec4US - Hélvio Junior (M4v3r1ck)
+
+**Proibida a reprodução ou publicação deste material sem prévia autorização expressa**
+
+---
 
 ## Sobre
 
 Este é um procedimento que realiza a configuração completa de um servidor Linux para as práticas e testes realizados durante o treinamento de DevSecOps da Sec4US.
 
-Conheça mais sobre nosso treinamento em: https://sec4us.com.br/treinamentos/devsecops/
+Conheça mais sobre nosso treinamento em: https://sec4us.com.br/treinamentos/devops-ecosystem-exploits/
 
 ## Ambiente
 
 > [!WARNING] 
-> O "alvo" servidor de deploy, deve ser um ubuntu linux e todos os seus dados poderão ser destruidos, sendo assim NÃO execute este procedimento em um servidor com dados que não podem ser perdidos.
+> O "alvo" servidor de deploy, deve ser um ubuntu linux e todos os seus dados poderão ser destruídos, sendo assim NÃO execute este procedimento em um servidor com dados que não podem ser perdidos.
 
 O servidor (ou alvo) deve ser um Ubuntu Linux que será o alvo de todo o procedimento de instalação. Recomenda-se que o servidor seja um Ubuntu Linux 22.04 ou superior, recentemente instalado e sem nenhuma informação que possa ser perdida, pois o procedimento de instalação é bem invasivo e irá reconfigurar diversos serviços do servidor.
 
@@ -27,10 +34,9 @@ O servidor (ou alvo) deve ser um Ubuntu Linux que será o alvo de todo o procedi
 
 Instale o Ubuntu em sua plataforma preferida (VmWare, VirtualBox, Hyper-V e etc).
 
-
 Dentro do servidor Ubuntu recém instalado realize os procedimentos abaixo.
 
-#### Atualize e instale as dependencias básicas
+#### Atualize e instale as dependências básicas
 
 ```bash
 apt update && apt -y upgrade
