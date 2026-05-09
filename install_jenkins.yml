@@ -84,19 +84,28 @@
 
     - name: Jenkins | Copy CA root cert
       copy:
-        remote_src: "/etc/nginx/certs/root-ca.pem"
+        src: "/etc/nginx/certs/root-ca.pem"
+        remote_src: true
         dest: "{{ JENKINS_HOME }}/root-ca.crt"
         owner: "root"
         group: "root"
 
+    - name: Jenkins | Find root SSH keys
+      ansible.builtin.find:
+        paths: /root/.ssh
+        patterns: 'id_rsa*'
+      register: jenkins_root_ssh_keys
+
     - name: Jenkins | Copy SSH keys
       copy:
-        remote_src: "{{ item }}"
+        src: "{{ item.path }}"
+        remote_src: true
         dest: "{{ JENKINS_HOME }}/home/.ssh/"
         owner: "root"
         group: "root"
-      with_fileglob:
-        - /root/.ssh/id_rsa*
+      loop: "{{ jenkins_root_ssh_keys.files }}"
+      loop_control:
+        label: "{{ item.path }}"
 
     - name: Jenkins | Creating Dockerfile
       copy:
