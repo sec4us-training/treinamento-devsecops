@@ -435,6 +435,11 @@
           newTokenName: "Admin token"
         status_code: 200
       register: token_resp
+      until: >
+        token_resp.status == 200
+        and token_resp.json.data.tokenValue is defined
+      retries: 30
+      delay: 10
 
     - name: Jenkins | Set fact with generated token (tokenValue)
       ansible.builtin.set_fact:

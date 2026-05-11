@@ -1,0 +1,137 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    GITLAB_HOME: /u01/gitlab
+    gitlab_external_url: 
+    gitlab_api_version: 
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+    - include_tasks: 'vault_token_gitlab.yml'    
+    - include_tasks: 'vault_token_jenkins.yml'
+
+
+    - name: WebAPI | Set project name
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "webapi"
+        gitlab_project_visibility: "private"
+
+    - include_tasks: "delete_project.yml"
+
+    - include_tasks: "create_project.yml"
+
+    # https://github.com/sec4us-training/web-api-linux
+    - name: WebAPI | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "/tmp/webapi_git/" } 
+          - { path: "/tmp/webapi_dump/" } 
+
+    - name: WebAPI | Dump repo
+      repo_replay:
+        action: extract
+        source: "https://github.com/sec4us-training/web-api-linux.git"
+        output: /tmp/webapi_dump
+
+    - name: WebAPI | Locate target commit zip
+      ansible.builtin.find:
+        paths: /tmp/webapi_dump/zips
+        patterns: "*_b9e1cb5*.zip"
+      register: webapi_zip_find
+
+    - name: WebAPI | Fail if commit zip not found
+      ansible.builtin.fail:
+        msg: "Commit zip b9e1cb5 não encontrado em /tmp/webapi_dump/zips"
+      when: webapi_zip_find.matched == 0
+
+    - name: WebAPI | Set zip path
+      ansible.builtin.set_fact:
+        webapi_zip_path: "{{ webapi_zip_find.files[0].path }}"
+
+    - name: WebAPI | Reset temp extract dir
+      ansible.builtin.file:
+        path: /tmp/webapi_zip_edit
+        state: "{{ item }}"
+      loop:
+        - absent
+        - directory
+
+    - name: WebAPI | Extract zip
+      ansible.builtin.unarchive:
+        src: "{{ webapi_zip_path }}"
+        dest: /tmp/webapi_zip_edit
+        remote_src: true
+
+    - name: WebAPI | Locate setup_tools.yml inside extracted content
+      ansible.builtin.find:
+        paths: /tmp/webapi_zip_edit
+        patterns: setup_tools.yml
+        recurse: true
+      register: webapi_setup_tools_find
+
+    - name: WebAPI | Fail if setup_tools.yml not found
+      ansible.builtin.fail:
+        msg: "setup_tools.yml não encontrado em {{ webapi_zip_path }}"
+      when: webapi_setup_tools_find.matched == 0
+
+    - name: WebAPI | Append block to setup_tools.yml
+      ansible.builtin.blockinfile:
+        path: "{{ webapi_setup_tools_find.files[0].path }}"
+        marker: "# {mark} APPENDED BY gitlab_webapi.yml"
+        insertafter: EOF
+        block: |
+          curl -u admin:{{ jenkins_admin_password }} https://{{jenkins_host}}
+        no_log: true
+
+    - name: WebAPI | Re-zip overwriting original
+      ansible.builtin.shell: |
+        rm -f {{ webapi_zip_path | quote }}
+        cd /tmp/webapi_zip_edit && zip -qr {{ webapi_zip_path | quote }} .
+      args:
+        executable: /bin/bash
+
+    - name: WebAPI | Rebuild para novo repo
+      repo_replay:
+        action: rebuild
+        input: /tmp/webapi_dump
+        target: /tmp/webapi_git
+        force: false   # default — falha se target não vazio. force=true wipe primeiro.
+
+    - name: GitLab | Ensure origin remote (SSH) is set
+      shell: |
+        set -e
+        URL="git@{{ gitlab_host }}:{{ gitlab_project_group }}/{{ gitlab_project_name }}.git"
+        cd /tmp/webapi_git/
+        if git remote get-url origin >/dev/null 2>&1; then
+          CURRENT=$(git remote get-url origin)
+          if [ "$CURRENT" != "$URL" ]; then
+            git remote set-url origin "$URL"
+            echo CHANGED
+          fi
+        else
+          git remote add origin "$URL"
+          echo CHANGED
+        fi
+      args:
+        executable: /bin/bash
+      register: webapi_origin_state
+      changed_when: "'CHANGED' in webapi_origin_state.stdout"
+
+    - name: GitLab | Commit
+      shell: |
+        cd /tmp/webapi_git/
+        git branch -m main
+        git add .
+        git commit -m "Deploy"
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
+      ignore_errors: false
+

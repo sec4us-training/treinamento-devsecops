@@ -324,9 +324,6 @@ else
 fi
 
 # Step 6 - Artifactory
-
-echo "step6_jfrog" >> "$status_file"
-
 echo -e "\n${OK} Executando passo 6 - install_jfrog.yml"
 grep "step6_jfrog" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
@@ -423,7 +420,7 @@ else
     echo -e "${OK} ${G}OK${W}"
 fi
 
-# Step 11 - Create Repo BANK
+# Step 11 - Create Repo Sonar Helper
 echo -e "\n${OK} Executando passo 11 gitlab_sonar_helper.yml"
 grep "gitlab_sonar_helper" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
@@ -436,6 +433,22 @@ else
         exit 1
     fi
     echo "gitlab_sonar_helper" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+# Step 11 - Create Repo Web API
+echo -e "\n${OK} Executando passo 11 gitlab_webapi.yml"
+grep "gitlab_webapi" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_webapi.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible gitlab_webapi${W}\n"
+        info
+        exit 1
+    fi
+    echo "gitlab_webapi" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 
