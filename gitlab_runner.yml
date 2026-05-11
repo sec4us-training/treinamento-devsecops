@@ -72,7 +72,7 @@
       copy:
         src: "{{ item.path }}"
         remote_src: true
-        dest: "{{ runner_home }}/home/.ssh/"
+        dest: "{{ runner_home }}/ssh_keys/"
         owner: "root"
         group: "root"
       loop: "{{ gitlab_root_ssh_keys.files }}"
