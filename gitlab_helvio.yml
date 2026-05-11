@@ -21,6 +21,8 @@
         gitlab_name: "Helvio Junior"
         gitlab_master_email: "helvio@labs.sec4us.com.br"
         gitlab_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+        gitlab_group_visibility: "public"
+        gitlab_project_visibility: "private"
       no_log: true
 
     - include_tasks: "create_group.yml"

@@ -15,6 +15,14 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
+    - name: GitLab | Set project name
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "bank"
+        gitlab_project_visibility: "private"
+
+    - include_tasks: "create_project.yml"
+
     - name: GitLab | Vault -> Store credentials
       ansible.builtin.uri:
         url: "https://{{ vault_host }}/v1/secret/bank"
@@ -293,11 +301,6 @@
         repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
 
     - include_tasks: 'jenkins_pipeline.yml'
-
-    - name: GitLab | Set project name
-      set_fact:
-        gitlab_project_group: "sec4us"
-        gitlab_project_name: "bank"
 
     - name: GitLab | List existing projects
       uri:

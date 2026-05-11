@@ -20,7 +20,7 @@
     method: "POST"
     headers:
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
-    body: "name={{ gitlab_project_name }}&namespace_id={{ gitlab_project_group_id }}"
+    body: "name={{ gitlab_project_name }}&namespace_id={{ gitlab_project_group_id }}&visibility={{ gitlab_project_visibility | default('private') }}"
     body_format: raw
     validate_certs: false
     return_content: true

@@ -262,6 +262,8 @@
       set_fact:
         gitlab_project_group: "sec4us"
         gitlab_project_name: "devsecops"
+        gitlab_group_visibility: "public"
+        gitlab_project_visibility: "private"
       no_log: true
 
     - include_tasks: "create_group.yml"

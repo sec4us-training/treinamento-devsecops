@@ -15,6 +15,14 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
+    - name: GitLab | Set project name
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "sonar_helper"
+        gitlab_project_visibility: "public"
+
+    - include_tasks: "create_project.yml"
+
     - name: GitLab | Check if path exists
       stat:
         path: /tmp/sonar_helper/
@@ -197,11 +205,6 @@
         repo_url: "https://{{gitlab_host}}/sec4us/sonar_helper.git"
 
     - include_tasks: 'jenkins_pipeline.yml'
-
-    - name: GitLab | Set project name
-      set_fact:
-        gitlab_project_group: "sec4us"
-        gitlab_project_name: "sonar_helper"
 
     - name: GitLab | List existing projects
       uri:
