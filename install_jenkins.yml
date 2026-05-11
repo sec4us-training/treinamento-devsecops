@@ -70,6 +70,12 @@
       shell: |
         nginx -s reload
 
+    - name: Jenkins | Stop service, if exists
+      shell: |
+        cd {{ JENKINS_HOME }}
+        docker compose down -v
+      ignore_errors: false
+
     - name: Jenkins | Remove directories
       file:
         path: "{{ item.path }}"

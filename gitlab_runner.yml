@@ -43,6 +43,12 @@
         runner_auth_token: "{{ create_runner.json.token }}"
       no_log: true
     
+    - name: GitLab | Stop service, if exists
+      shell: |
+        cd {{ runner_home }}
+        docker compose down -v
+      ignore_errors: false
+
     - name: GitLab | Remove directories
       file:
         path: "{{ item.path }}"

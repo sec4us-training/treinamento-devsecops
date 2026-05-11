@@ -46,6 +46,12 @@
       shell: |
         nginx -s reload
 
+    - name: Web01 | Stop service, if exists
+      shell: |
+        cd {{ WEB_HOME }}
+        docker compose down -v
+      ignore_errors: false
+
     - name: Web01 | Remove directories
       file:
         path: "{{ item.path }}"

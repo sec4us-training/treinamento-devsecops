@@ -45,6 +45,12 @@
       shell: |
         nginx -s reload
 
+    - name: Vault | Stop service, if exists
+      shell: |
+        cd {{ vault_home }}
+        docker compose down -v
+      ignore_errors: false
+
     - name: Vault | Remove directories
       file:
         path: "{{ item.path }}"
