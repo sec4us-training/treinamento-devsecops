@@ -54,7 +54,7 @@
       shell: |
         cd {{ GITLAB_HOME }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: GitLab | Remove directories
       file:

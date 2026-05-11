@@ -55,7 +55,7 @@
       shell: |
         cd {{ SONAR_HOME }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: Sonar | Remove directories
       file:

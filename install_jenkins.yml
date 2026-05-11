@@ -74,7 +74,7 @@
       shell: |
         cd {{ JENKINS_HOME }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: Jenkins | Remove directories
       file:

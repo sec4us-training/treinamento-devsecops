@@ -54,7 +54,7 @@
       shell: |
         cd {{ ARTIFACTORY_HOME }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: Artifactory | Remove directories
       file:

@@ -50,7 +50,7 @@
       shell: |
         cd {{ WEB_HOME }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: Web01 | Remove directories
       file:

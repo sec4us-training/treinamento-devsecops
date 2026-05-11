@@ -49,7 +49,7 @@
       shell: |
         cd {{ vault_home }}
         docker compose down -v
-      ignore_errors: false
+      ignore_errors: true
 
     - name: Vault | Remove directories
       file:
