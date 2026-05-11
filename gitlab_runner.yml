@@ -43,6 +43,14 @@
         runner_auth_token: "{{ create_runner.json.token }}"
       no_log: true
     
+    - name: GitLab | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ runner_home }}/ssh_keys" } 
+          - { path: "{{ runner_home }}" } 
+          
     - name: GitLab | Create directories
       file:
         path: "{{ item.path }}"
