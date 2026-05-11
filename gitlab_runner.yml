@@ -54,15 +54,22 @@
           - { path: "{{ runner_home }}" }  
           - { path: "{{ runner_home }}/ssh_keys" }  
 
+    - name: GitLab | Find root SSH keys
+      ansible.builtin.find:
+        paths: /root/.ssh
+        patterns: 'id_rsa*'
+      register: gitlab_root_ssh_keys
+
     - name: GitLab | Copy SSH keys
       copy:
-        src: "{{ item }}"
-        dest: "{{ runner_home }}/ssh_keys"
+        src: "{{ item.path }}"
         remote_src: true
+        dest: "{{ runner_home }}/home/.ssh/"
         owner: "root"
         group: "root"
-      with_fileglob:
-        - /root/.ssh/id_rsa*
+      loop: "{{ gitlab_root_ssh_keys.files }}"
+      loop_control:
+        label: "{{ item.path }}"
 
     - name: GitLab | Copy CA root cert
       copy:
