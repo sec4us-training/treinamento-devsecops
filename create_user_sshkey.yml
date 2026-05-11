@@ -7,7 +7,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: user_list_output
+  until: user_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if user is already exists"
   set_fact:
@@ -37,7 +41,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: keys_list_output
+  until: keys_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if ssh key is already exists in keys"
   set_fact:
@@ -51,12 +59,16 @@
     method: "POST"
     headers:
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
-    body: 
+    body:
       id: "{{ gitlab_user_id }}"
-      key: "{{ gitlab_ssh_key }}" 
-      title: "SSH Key" 
+      key: "{{ gitlab_ssh_key }}"
+      title: "SSH Key"
     body_format: json
     validate_certs: false
     return_content: true
-    status_code: 201
+    status_code: [201, 502, 503, 504]
+  register: add_key_output
+  until: add_key_output.status == 201
+  retries: 30
+  delay: 10
   when: not key_exists

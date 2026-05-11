@@ -7,7 +7,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: projects_list_output
+  until: projects_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if project exists"
   set_fact:
@@ -31,8 +35,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
-    status_code: [202, 204]
+    status_code: [202, 204, 502, 503, 504]
   register: project_delete_output
+  until: project_delete_output.status in [202, 204]
+  retries: 30
+  delay: 10
   when: project_exists
 
 - name: "Wait for project to be fully deleted"

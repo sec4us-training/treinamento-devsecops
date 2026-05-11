@@ -310,7 +310,11 @@
           PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
         validate_certs: false
         return_content: true
+        status_code: [200, 502, 503, 504]
       register: projects_list_output
+      until: projects_list_output.status == 200
+      retries: 30
+      delay: 10
 
     - name: "Check if project is already exists"
       set_fact:
@@ -341,7 +345,10 @@
           masked: "true"
           raw: "true"
           description: "DevSecOps fake secret token"
-        status_code: [201, 400, 409]
+        status_code: [201, 400, 409, 502, 503, 504]
         validate_certs: false
       register: create_var
+      until: create_var.status in [201, 400, 409]
+      retries: 30
+      delay: 10
       no_log: true

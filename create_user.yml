@@ -7,7 +7,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: user_list_output
+  until: user_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if user is already exists"
   set_fact:
@@ -26,8 +30,11 @@
     body_format: raw
     validate_certs: false
     return_content: true
-    status_code: 201
+    status_code: [201, 502, 503, 504]
   register: user_output
+  until: user_output.status == 201
+  retries: 30
+  delay: 10
   when: not user_exists
 
 - name: "Set user ID"
@@ -56,7 +63,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: member_list_output
+  until: member_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if user is already exists in group"
   set_fact:
@@ -74,5 +85,9 @@
     body_format: raw
     validate_certs: false
     return_content: true
-    status_code: 201
+    status_code: [201, 502, 503, 504]
+  register: add_member_output
+  until: add_member_output.status == 201
+  retries: 30
+  delay: 10
   when: not member_exists

@@ -7,7 +7,11 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
+    status_code: [200, 502, 503, 504]
   register: group_list_output
+  until: group_list_output.status == 200
+  retries: 30
+  delay: 10
 
 - name: "Check if group is already exists"
   set_fact:
@@ -24,8 +28,11 @@
     body_format: raw
     validate_certs: false
     return_content: true
-    status_code: 201
+    status_code: [201, 502, 503, 504]
   register: group_output
+  until: group_output.status == 201
+  retries: 30
+  delay: 10
   when: not group_exists
 
 - name: "Set Group ID"
