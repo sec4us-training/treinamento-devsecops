@@ -209,6 +209,10 @@
       changed_when: true
       no_log: true
 
+    - name: GitLab | Admin oauth token
+      debug:
+        msg: "__SEC4US_CRED__::GitLab Token::{{ gitlab_root_token }}"
+
     - name: Disable Auto DevOps globally (instance level)
       ansible.builtin.uri:
         url: "https://{{ gitlab_host }}/api/v4/application/settings"

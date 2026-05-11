@@ -309,6 +309,10 @@
       debug:
         msg: "Vault root token is {{ init_data.root_token }}"
 
+    - name: Vault | root token
+      debug:
+        msg: "__SEC4US_CRED__::Vault Token::{{ init_data.root_token }}"
+
     - name: Vault | Save credentials file
       copy:
         dest: "/root/vault_creds.txt"

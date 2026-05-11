@@ -358,6 +358,10 @@
             }
           }}
 
+    - name: Jenkins | Admin passwd
+      debug:
+        msg: "__SEC4US_CRED__::Jenkins Admin Password::{{ jenkins_admin_password }}"
+
     - name: Jenkins | Install Jenkins plugins
       uri:
         url: "https://{{ jenkins_host }}/pluginManager/installPlugins"
