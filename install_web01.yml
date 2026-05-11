@@ -164,8 +164,9 @@
         git_dir_path: "{{ playbook_dir }}/.git"
 
     - name: Web01 | Sync files
-      shell: |
-        rsync -a {{ git_dir_path }}/* {{ WEB_HOME }}/data/.git
+      ansible.builtin.copy:
+        src: "{{ git_dir_path }}/"
+        dest: "{{ WEB_HOME }}/data/.git/"
 
     - name: Web01 | Deploy to gitlab
       shell: |
