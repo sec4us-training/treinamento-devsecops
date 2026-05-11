@@ -50,6 +50,16 @@
       shell: |
         nginx -s reload
 
+    - name: GitLab | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ GITLAB_HOME }}/config" }
+          - { path: "{{ GITLAB_HOME }}/logs" }
+          - { path: "{{ GITLAB_HOME }}/data" }
+          - { path: "{{ GITLAB_HOME }}" }
+          
     - name: GitLab | Create directories
       file:
         path: "{{ item.path }}"

@@ -46,6 +46,15 @@
       shell: |
         nginx -s reload
 
+    - name: Web01 | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ WEB_HOME }}/data/.git" }
+          - { path: "{{ WEB_HOME }}/data" }
+          - { path: "{{ WEB_HOME }}" }
+          
     - name: Web01 | Create directories
       file:
         path: "{{ item.path }}"

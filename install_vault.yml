@@ -45,6 +45,16 @@
       shell: |
         nginx -s reload
 
+    - name: Vault | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ vault_home }}/logs" } 
+          - { path: "{{ vault_home }}/data" } 
+          - { path: "{{ vault_home }}/config" } 
+          - { path: "{{ vault_home }}" } 
+
     - name: Vault | Create directories
       file:
         path: "{{ item.path }}"

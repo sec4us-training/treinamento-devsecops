@@ -50,6 +50,15 @@
       shell: |
         nginx -s reload
 
+    - name: Artifactory | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ ARTIFACTORY_HOME }}/artifactory/etc" } 
+          - { path: "{{ ARTIFACTORY_HOME }}/postgres" }
+          - { path: "{{ ARTIFACTORY_HOME }}" }
+
     - name: Artifactory | Create directories
       file:
         path: "{{ item.path }}"

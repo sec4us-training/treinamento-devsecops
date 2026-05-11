@@ -70,6 +70,15 @@
       shell: |
         nginx -s reload
 
+    - name: Jenkins | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ JENKINS_HOME }}/home/.ssh/" } 
+          - { path: "{{ JENKINS_HOME }}/home/" } 
+          - { path: "{{ JENKINS_HOME }}" }
+          
     - name: Jenkins | Create directories
       file:
         path: "{{ item.path }}"

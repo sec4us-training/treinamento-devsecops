@@ -51,6 +51,19 @@
       shell: |
         nginx -s reload
 
+    - name: Sonar | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+          - { path: "{{ SONAR_HOME }}/sonarqube/logs" }
+          - { path: "{{ SONAR_HOME }}/sonarqube/extensions" }
+          - { path: "{{ SONAR_HOME }}/sonarqube/data" }
+          - { path: "{{ SONAR_HOME }}/sonarqube" }
+          - { path: "{{ SONAR_HOME }}/postgresql/data" }
+          - { path: "{{ SONAR_HOME }}/postgresql" }
+          - { path: "{{ SONAR_HOME }}" }
+
     - name: Sonar | Create directories
       file:
         path: "{{ item.path }}"
