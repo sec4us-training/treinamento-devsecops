@@ -15,23 +15,9 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
-    - name: GitLab | Vault -> Store credentials
-      ansible.builtin.uri:
-        url: "https://{{ vault_host }}/v1/secret/bank"
-        method: POST
-        headers:
-          X-Vault-Token: "{{ vault_token }}"
-        body_format: json
-        body:
-          db_user: "bank"
-          db_pass: "123456"
-        validate_certs: false
-        status_code: [200, 204]
-      no_log: true
-
     - name: GitLab | Check if path exists
       stat:
-        path: /tmp/bank_git/
+        path: /tmp/sonar_helper/
       register: git_path
 
     - name: GitLab | Git clone
@@ -40,25 +26,22 @@
         git config --global user.email "helvio@labs.sec4us.com.br"
         chown 600 "{{ GITLAB_HOME }}/id_rsa_root"
 
+        rm -rf /tmp/sonar_helper/
+        rm -rf /tmp/sonar_helper_git/
+
         cd /tmp
-        rm -rf /tmp/bank_api/
-        rm -rf /tmp/bank_git/
-        git clone https://github.com/sec4us-training/web-api-linux.git bank_api
+        git clone https://github.com/sec4us-training/treinamento-devsecops.git sonar_helper
 
-        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git clone "git@{{gitlab_host}}:sec4us/bank.git" /tmp/bank_git
-        mkdir -p /tmp/bank_git/ || true
-        rsync -a ./bank_api/bank/* /tmp/bank_git/
-
-        cd /tmp/bank_git/
-        find . -path "*/migrations/0*.py" ! -path "*/lib/*" -exec rm -rf {} \;
-
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git clone "git@{{gitlab_host}}:sec4us/sonar_helper.git" /tmp/sonar_helper_git
+        mkdir -p /tmp/sonar_helper_git/ || true
+        rsync -a ./sonar_helper/sonar_helper/* /tmp/sonar_helper_git/
       ignore_errors: false
       become: yes
       when: not git_path.stat.exists
 
     - name: Creating a gitignore
       copy:
-        dest: "/tmp/bank_git/.gitignore"
+        dest: "/tmp/sonar_helper_git/.gitignore"
         content: |
           # Django #
           *.log
@@ -194,86 +177,6 @@
           !.vscode/extensions.json
           .history
 
-    - name: Creatting Bank config file
-      copy:
-        dest: "/tmp/bank_git/config.ini"
-        force: yes
-        content: |
-          [GENERAL]
-          debug=True
-
-          [DATABASE]
-          user = bank
-          passwd = 123456
-          db = bank
-          host = bankdb
-          port = 3306
-          charset = utf8
-          autocommit = False
-
-    - name: Creating Jenkinsfile
-      ansible.builtin.copy:
-        dest: "/tmp/bank_git/Jenkinsfile"
-        force: true
-        content: |
-          {% raw %}pipeline {
-            agent any
-
-            stages {
-              stage('Checkout') {
-                steps {
-                  checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    userRemoteConfigs: [[
-                      url: 'https://{% endraw %}{{ gitlab_host }}{% raw %}/sec4us/bank.git',
-                      credentialsId: '{% endraw %}{{credentials_id}}{% raw %}'
-                    ]]
-                  ])
-                }
-              }
-
-              stage('Build com segredos do Vault') {
-                steps {
-                  script {
-                    def secrets = [[
-                      path: 'secret/bank',
-                      engineVersion: 1,
-                      secretValues: [
-                        [envVar: 'DB_USER', vaultKey: 'db_user'],
-                        [envVar: 'DB_PASS', vaultKey: 'db_pass']
-                      ]
-                    ]]
-
-                    def configuration = [
-                      vaultUrl: 'https://{% endraw %}{{ vault_host }}{% raw %}',
-                      vaultCredentialId: 'vault',
-                      engineVersion: 1
-                    ]
-
-                    withVault([configuration: configuration, vaultSecrets: secrets]) {
-                      sh '''
-                        set +x
-                        echo "Rodando build..."
-                        echo "DB_USER: ${DB_USER}"
-                        echo "DB_PASS: ${DB_PASS}"
-                      '''
-                    }
-                  }
-                }
-              }
-            }
-
-            post {
-              always {
-                echo "final steps"
-                // Recomendo manter limpeza
-                // cleanWs(deleteDirs: true, notFailBuild: true, disableDeferredWipeout: true)
-              }
-            }
-          }{% endraw %}
-
-
     - name: GitLab | Commit
       shell: |
         cd /tmp/bank_git/
@@ -283,21 +186,22 @@
         GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push origin main
       ignore_errors: false
 
+
     - include_tasks: 'vault_token_jenkins.yml'
 
-    #Create Bank CI/CD
+    #Create Sonar helper CI/CD
     - name: Jenkins | Set fact (Bank CI/CD)
       ansible.builtin.set_fact:
-        job_name: "bank-pipeline"
-        job_description: "Pipeline job pulling Jenkinsfile from SCM"
-        repo_url: "https://{{gitlab_host}}/sec4us/bank.git"
+        job_name: "sonar-pipeline"
+        job_description: "Sonar Helper pipeline from SCM"
+        repo_url: "https://{{gitlab_host}}/sec4us/sonar_helper.git"
 
     - include_tasks: 'jenkins_pipeline.yml'
 
     - name: GitLab | Set project name
       set_fact:
         gitlab_project_group: "sec4us"
-        gitlab_project_name: "bank"
+        gitlab_project_name: "sonar_helper"
 
     - name: GitLab | List existing projects
       uri:
@@ -322,23 +226,3 @@
         - project_exists
         - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
 
-    - name: GitLab | Create CI/CD variable (project level)
-      ansible.builtin.uri:
-        url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
-        method: POST
-        headers:
-          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
-        body_format: form-urlencoded
-        body:
-          key: "FAKE_SECRET_TOKEN"
-          value: "inY9Ts0MThkdDptliBlLsDhxg39AYsMric4tUSvmHT"
-          variable_type: "env_var"
-          environment_scope: "*"
-          protected: "true"
-          masked: "true"
-          raw: "true"
-          description: "DevSecOps fake secret token"
-        status_code: [201, 400, 409]
-        validate_certs: false
-      register: create_var
-      no_log: true

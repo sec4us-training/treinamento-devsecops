@@ -1,0 +1,16 @@
+- name: Vault | Read sonar admin
+  ansible.builtin.uri:
+    url: "https://{{ vault_host }}/v1/secret/sonarqube/admin"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    validate_certs: false
+    status_code: 200
+  register: read_secret
+  no_log: true
+
+- name: "Set data"
+  set_fact:
+    sonar_admin_username: "{{ read_secret.json.data.username }}"
+    sonar_admin_password: "{{ read_secret.json.data.password }}"
+  no_log: true

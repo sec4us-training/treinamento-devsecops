@@ -342,19 +342,19 @@ else
     echo -e "${OK} ${G}OK${W}"
 fi
 
-# Step 7 - Jenkins
-echo -e "\n${OK} Executando passo 7 - install_jenkins.yml"
-grep "step7_jenkins" "$status_file" >/dev/null 2>&1
+# Step 7 - Sonarqube
+echo -e "\n${OK} Executando passo 7 - install_sonar.yml"
+grep "step7_sonar" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
     echo -e "${DEBUG} ${C}Pulando passo 7...${W}"
 else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jenkins.yml
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_sonar.yml
     if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Jenkins${W}\n"
+        echo -e "${ERROR} ${O} Erro executando ansible Sonarqube${W}\n"
         info
         exit 1
     fi
-    echo "step7_jenkins" >> "$status_file"
+    echo "step7_sonar" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 
@@ -374,19 +374,19 @@ else
     echo -e "${OK} ${G}OK${W}"
 fi
 
-# Step 9 - Sonarqube
-echo -e "\n${OK} Executando passo 9- install_sonar.yml"
-grep "step9_sonar" "$status_file" >/dev/null 2>&1
+# Step 9 - Jenkins
+echo -e "\n${OK} Executando passo 9 - install_jenkins.yml"
+grep "step9_jenkins" "$status_file" >/dev/null 2>&1
 if [ "$?" == "0" ]; then
     echo -e "${DEBUG} ${C}Pulando passo 9...${W}"
 else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_sonar.yml
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jenkins.yml
     if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Sonarqube${W}\n"
+        echo -e "${ERROR} ${O} Erro executando ansible Jenkins${W}\n"
         info
         exit 1
     fi
-    echo "step9_sonar" >> "$status_file"
+    echo "step9_jenkins" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 
@@ -420,6 +420,22 @@ else
         exit 1
     fi
     echo "gitlab_bank" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+fi
+
+# Step 11 - Create Repo BANK
+echo -e "\n${OK} Executando passo 11 gitlab_sonar_helper.yml"
+grep "gitlab_sonar_helper" "$status_file" >/dev/null 2>&1
+if [ "$?" == "0" ]; then
+    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
+else
+    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_sonar_helper.yml
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible gitlab_sonar_helper${W}\n"
+        info
+        exit 1
+    fi
+    echo "gitlab_sonar_helper" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
 fi
 

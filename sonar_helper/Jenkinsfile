@@ -1,0 +1,130 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    environment {
+        JFROG_URL        = 'https://artifactory.labs.sec4us.com.br'
+        JFROG_REPO       = 'sec4us'
+        JFROG_TARGET     = "${JFROG_URL}/artifactory/${JFROG_REPO}"
+        ARTIFACT_GROUP   = 'com/sec4us/lab'
+        ARTIFACT_ID      = 'sonar-helper'
+        ARTIFACT_VERSION = '1.0.0'
+
+        JAVA_VERSION  = '21.0.4+7'
+        JAVA_TARBALL  = 'OpenJDK21U-jdk_x64_linux_hotspot_21.0.4_7.tar.gz'
+        JAVA_URL      = 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.4%2B7/OpenJDK21U-jdk_x64_linux_hotspot_21.0.4_7.tar.gz'
+        JAVA_DIRNAME  = 'jdk-21.0.4+7'
+
+        MAVEN_VERSION = '3.9.9'
+        MAVEN_URL     = 'https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz'
+
+        TOOLS_DIR     = "${WORKSPACE}/.tools"
+        JAVA_HOME     = "${WORKSPACE}/.tools/jdk-21.0.4+7"
+        M2_HOME       = "${WORKSPACE}/.tools/apache-maven-3.9.9"
+        PATH          = "${WORKSPACE}/.tools/jdk-21.0.4+7/bin:${WORKSPACE}/.tools/apache-maven-3.9.9/bin:${PATH}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Java 21 & Maven') {
+            steps {
+                sh '''
+                    set -eu
+                    mkdir -p "${TOOLS_DIR}"
+                    cd "${TOOLS_DIR}"
+
+                    if [ ! -x "${JAVA_HOME}/bin/java" ]; then
+                        echo ">> Downloading Temurin JDK ${JAVA_VERSION}"
+                        curl -fsSL -o "${JAVA_TARBALL}" "${JAVA_URL}"
+                        tar -xzf "${JAVA_TARBALL}"
+                        rm -f "${JAVA_TARBALL}"
+                    else
+                        echo ">> JDK already cached at ${JAVA_HOME}"
+                    fi
+
+                    if [ ! -x "${M2_HOME}/bin/mvn" ]; then
+                        echo ">> Downloading Apache Maven ${MAVEN_VERSION}"
+                        curl -fsSL -o "apache-maven-${MAVEN_VERSION}-bin.tar.gz" "${MAVEN_URL}"
+                        tar -xzf "apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+                        rm -f "apache-maven-${MAVEN_VERSION}-bin.tar.gz"
+                    else
+                        echo ">> Maven already cached at ${M2_HOME}"
+                    fi
+
+                    echo "---- versions ----"
+                    java -version
+                    mvn -v
+                '''
+            }
+        }
+
+        stage('Build') {
+            steps {
+                withCredentials([usernamePassword(
+                        credentialsId: 'sonar-admin',
+                        usernameVariable: 'SONAR_ADMIN_USER',
+                        passwordVariable: 'SONAR_ADMIN_PASSWORD')]) {
+                    sh 'mvn -B -ntp clean package'
+                }
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
+        }
+
+        stage('Deploy to JFrog') {
+            steps {
+                withCredentials([usernamePassword(
+                        credentialsId: 'jfrog-sec4us',
+                        usernameVariable: 'JFROG_USER',
+                        passwordVariable: 'JFROG_PASS')]) {
+                    sh '''
+                        set -eu
+                        JAR_FILE="target/${ARTIFACT_ID}-${ARTIFACT_VERSION}.jar"
+                        FAT_JAR="target/${ARTIFACT_ID}-${ARTIFACT_VERSION}-all.jar"
+                        POM_FILE="pom.xml"
+
+                        BASE_PATH="${JFROG_TARGET}/${ARTIFACT_GROUP}/${ARTIFACT_ID}/${ARTIFACT_VERSION}"
+
+                        upload() {
+                            local src="$1"
+                            local dst="$2"
+                            echo ">> uploading ${src} -> ${dst}"
+                            curl -fsSL -u "${JFROG_USER}:${JFROG_PASS}" \\
+                                 -T "${src}" "${dst}"
+                            echo
+                        }
+
+                        upload "${JAR_FILE}" "${BASE_PATH}/${ARTIFACT_ID}-${ARTIFACT_VERSION}.jar"
+                        upload "${POM_FILE}" "${BASE_PATH}/${ARTIFACT_ID}-${ARTIFACT_VERSION}.pom"
+
+                        if [ -f "${FAT_JAR}" ]; then
+                            upload "${FAT_JAR}" "${BASE_PATH}/${ARTIFACT_ID}-${ARTIFACT_VERSION}-all.jar"
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed ${ARTIFACT_ID}-${ARTIFACT_VERSION} to ${JFROG_TARGET}"
+        }
+        failure {
+            echo 'Build or deploy failed.'
+        }
+    }
+}

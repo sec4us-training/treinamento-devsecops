@@ -498,9 +498,9 @@
 
     - include_tasks: 'jenkins_create_cred.yml'
 
-    - name: Jenkins | Set fact 
+    - name: Jenkins | Set fact
       ansible.builtin.set_fact:
-        json_body: 
+        json_body:
           "": "15"
           credentials:
             scope: "GLOBAL"
@@ -512,5 +512,37 @@
       no_log: true
 
     - include_tasks: 'jenkins_create_cred.yml'
-    - include_tasks: 'jenkins_pipeline.yml'
 
+    - include_tasks: 'vault_token_jfrog.yml'
+
+    - name: Jenkins | Set fact (jfrog-sec4us)
+      ansible.builtin.set_fact:
+        json_body:
+          "": "0"
+          credentials:
+            scope: "GLOBAL"
+            id: "jfrog-sec4us"
+            username: "{{ jfrog_admin_username }}"
+            password: "{{ jfrog_admin_password }}"
+            description: "JFrog Artifactory admin (sec4us)"
+            "$class": "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
+      no_log: true
+
+    - include_tasks: 'jenkins_create_cred.yml'
+
+    - include_tasks: 'vault_token_sonar.yml'
+
+    - name: Jenkins | Set fact (sonar-admin)
+      ansible.builtin.set_fact:
+        json_body:
+          "": "0"
+          credentials:
+            scope: "GLOBAL"
+            id: "sonar-admin"
+            username: "{{ sonar_admin_username }}"
+            password: "{{ sonar_admin_password }}"
+            description: "SonarQube admin credentials"
+            "$class": "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
+      no_log: true
+
+    - include_tasks: 'jenkins_create_cred.yml'

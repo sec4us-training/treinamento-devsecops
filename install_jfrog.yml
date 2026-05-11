@@ -6,7 +6,11 @@
     ARTIFACTORY_HOME: /u01/artifactory
     jfrog_url: "http://127.0.0.1:8082"           # Router/Access
     jfrog_admin_user: "admin"
-    jfrog_admin_current_password: "password"
+    jfrog_admin_current_password: "@Pass123"       # senha do snapshot, rotacionada pelo deploy
+    jfrog_artifactory_version: "7.111.9"
+    jfrog_postgres_version: "13.23-alpine"
+    jfrog_snapshot_local: "templates/jfrog/snapshot.tar.gz"
+    jfrog_snapshot_remote: "/tmp/jfrog_snapshot.tar.gz"
 
   vars_files:
     - vars.yml
@@ -65,7 +69,7 @@
           - { path: "{{ ARTIFACTORY_HOME }}/postgres" }
           - { path: "{{ ARTIFACTORY_HOME }}" }
 
-    - name: Artifactory | Create directories
+    - name: Artifactory | Create base directories
       file:
         path: "{{ item.path }}"
         state: directory
@@ -75,19 +79,25 @@
       with_items:
           - { path: "{{ ARTIFACTORY_HOME }}" }
           - { path: "{{ ARTIFACTORY_HOME }}/postgres" }
-          - { path: "{{ ARTIFACTORY_HOME }}/artifactory/etc" }         
+          - { path: "{{ ARTIFACTORY_HOME }}/artifactory" }
 
-    - name: Artifactory | Creating system.yaml
+    - name: Artifactory | Upload snapshot tarball
       copy:
-        dest: "{{ ARTIFACTORY_HOME }}/artifactory/etc/system.yaml"
-        content: |
-          shared:
-            database:
-              type: postgresql
-              driver: org.postgresql.Driver
-              url: "jdbc:postgresql://postgres:5432/artifactory"
-              username: "artifactory"
-              password: "ArtifactorySec4USLabP@sS"
+        src: "{{ jfrog_snapshot_local }}"
+        dest: "{{ jfrog_snapshot_remote }}"
+        mode: 0644
+
+    - name: Artifactory | Extract snapshot bundle
+      ansible.builtin.unarchive:
+        src: "{{ jfrog_snapshot_remote }}"
+        dest: "/tmp"
+        remote_src: true
+
+    - name: Artifactory | Restore etc/ from snapshot (config + master.key + join.key)
+      ansible.builtin.unarchive:
+        src: "/tmp/jfrog_snapshot/etc.tar.gz"
+        dest: "{{ ARTIFACTORY_HOME }}/artifactory"
+        remote_src: true
 
     - name: Artifactory | Creating docker-compose.yml
       copy:
@@ -96,7 +106,7 @@
           services:
 
             postgres:
-              image: postgres:13-alpine
+              image: "postgres:{{ jfrog_postgres_version }}"
               container_name: jfrog-postgres
               restart: always
               environment:
@@ -113,7 +123,7 @@
                 retries: 30
 
             artifactory:
-              image: releases-docker.jfrog.io/jfrog/artifactory-oss:7.111.9
+              image: "releases-docker.jfrog.io/jfrog/artifactory-oss:{{ jfrog_artifactory_version }}"
               container_name: jfrog-artifactory
               restart: unless-stopped
 
@@ -145,10 +155,29 @@
                   hard: 65536
 
 
-    - name: Artifactory | Start service
+    - name: Artifactory | Start postgres only
       shell: |
         cd {{ ARTIFACTORY_HOME }}
-        docker compose up -d
+        docker compose up -d postgres
+
+    - name: Artifactory | Wait postgres healthy
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' jfrog-postgres
+      register: jfrog_pg_health
+      retries: 30
+      delay: 5
+      until: jfrog_pg_health.stdout == "healthy"
+      changed_when: false
+
+    - name: Artifactory | Restore postgres dump from snapshot
+      shell: |
+        docker exec -i jfrog-postgres psql -U artifactory -d artifactory -v ON_ERROR_STOP=1 < /tmp/jfrog_snapshot/artifactory.sql
+      register: jfrog_pg_restore
+      changed_when: true
+
+    - name: Artifactory | Start artifactory
+      shell: |
+        cd {{ ARTIFACTORY_HOME }}
+        docker compose up -d artifactory
 
     - name: Artifactory | Wait for JFrog container to be running
       ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jfrog-artifactory
@@ -158,34 +187,9 @@
       until: jfrog_running.stdout == "true"
       changed_when: false
 
-    - name: Artifactory | Wait for docker to be ready
-      ansible.builtin.command: docker exec jfrog-artifactory bash -lc "test -d /var/opt/jfrog"
-      register: jfrog_status
-      retries: 10
-      delay: 15
-      until: jfrog_status.rc == 0
-      changed_when: true
-
-    - name: Artifactory | Adjust permitions
+    - name: Artifactory | Adjust permissions inside container
       shell: |
         docker exec --user root jfrog-artifactory bash -lc "chown artifactory:artifactory /var/opt/jfrog/artifactory/* -R"
-
-    - name: Artifactory | Wait for docker to be ready 2
-      shell: |
-        docker exec jfrog-artifactory bash -lc "test -d \${JF_PRODUCT_HOME}/var/etc/security"
-      register: jfrog_status
-      retries: 10
-      delay: 15
-      until: jfrog_status.rc == 0
-      changed_when: true
-
-    - name: Artifactory | Create master.key if missing
-      shell: |
-        docker exec jfrog-artifactory bash -lc "test -f \${JF_PRODUCT_HOME}/var/etc/security/master.key || openssl rand -hex 16 > \${JF_PRODUCT_HOME}/var/etc/security/master.key"
-      
-    - name: Artifactory | Create join.key if missing
-      shell: |
-        docker exec jfrog-artifactory bash -lc "test -f \${JF_PRODUCT_HOME}/var/etc/security/join.key || openssl rand -hex 16 > \${JF_PRODUCT_HOME}/var/etc/security/join.key"
 
     - name: Artifactory | Wait for Artifactory port 8081
       ansible.builtin.wait_for:
@@ -236,46 +240,76 @@
         msg: "JFrog did not return access_token. Check jfrog_url/credentials."
       when: jfrog_access_token | length == 0
 
-    #- name: Artifactory | Generating admin password
-    #  set_fact:
-    #    jfrog_new_admin_password: "{{ lookup('community.general.random_string', upper=True, numbers=True, special=false, length=30) }}"
+    - name: Artifactory | Generating new admin password
+      ansible.builtin.set_fact:
+        jfrog_new_admin_password: "Sec4US@{{ lookup('community.general.random_string', upper=true, lower=true, numbers=true, special=false, length=24) }}"
+      no_log: true
 
-    #- name: Artifactory | Check if repo exists
-    #  ansible.builtin.uri:
-    #    url: "https://{{ artifactory_host }}/artifactory/api/repositories/{{ repo_key }}"
-    #    method: GET
-    #    headers:
-    #      Authorization: "Bearer {{ jfrog_access_token }}"
-    #    status_code:
-    #      - 200
-    #      - 404
-    #  register: repo_check
+    - name: Artifactory | Reset admin password (onboarding step 1)
+      ansible.builtin.uri:
+        url: "https://{{ artifactory_host }}/artifactory/api/security/users/authorization/changePassword"
+        method: POST
+        validate_certs: false
+        headers:
+          Authorization: "Bearer {{ jfrog_access_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          userName: "{{ jfrog_admin_user }}"
+          oldPassword: "{{ jfrog_admin_current_password }}"
+          newPassword1: "{{ jfrog_new_admin_password }}"
+          newPassword2: "{{ jfrog_new_admin_password }}"
+        status_code: [200, 204]
+      no_log: true
 
-    #- name: Create Generic local repository
-    #  ansible.builtin.uri:
-    #    url: "https://{{ artifactory_host }}/artifactory/api/repositories/{{ repo_key }}"
-    #    method: PUT
-    #    headers:
-    #      Authorization: "Bearer {{ jfrog_access_token }}"
-    #      Content-Type: "application/json"
-    #    body_format: json
-    #    body:
-    #      rclass: local
-    #      packageType: generic
-    #      description: "Repo genérico para arquivos (bins, zips, installers, etc.)"
-    #      repoLayoutRef: "simple-default"
-    #      handleReleases: true
-    #      handleSnapshots: true
-    #      suppressPomConsistencyChecks: true
-    #      xrayIndex: false
-    #    status_code:
-    #      - 200
-    #      - 201
-    #  register: create_repo
-    #  when: repo_check.status == 404
+    - name: Artifactory | Create long-lived admin access token (post password reset)
+      ansible.builtin.uri:
+        url: "https://{{ artifactory_host }}/artifactory/api/security/token"
+        method: POST
+        validate_certs: false
+        user: "{{ jfrog_admin_user }}"
+        password: "{{ jfrog_new_admin_password }}"
+        force_basic_auth: true
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+        body_format: form-urlencoded
+        body:
+          username: "{{ jfrog_admin_user }}"
+          scope: "member-of-groups:admin"
+          expires_in: 0
+        return_content: true
+        status_code: 200
+      register: jfrog_admin_token_resp
+      retries: 5
+      delay: 5
+      until: jfrog_admin_token_resp.status == 200
+      no_log: true
 
+    - name: Artifactory | Extract admin access token
+      ansible.builtin.set_fact:
+        jfrog_admin_token: "{{ jfrog_admin_token_resp.json.access_token | default('') }}"
+      no_log: true
 
-    - name: Jenkins | Store credentials
+    - name: Artifactory | Fail if admin access token was not returned
+      ansible.builtin.fail:
+        msg: "JFrog did not return long-lived admin access_token."
+      when: jfrog_admin_token | length == 0
+
+    # Set base URL não é executado: o endpoint /api/system/configuration/baseUrl
+    # exige licença Pro/Enterprise (OSS retorna 403). O shared.jfrogUrl no
+    # system.yaml também não pode ser usado em single-node OSS (força topologia
+    # distribuída e trava o boot esperando jffe/jfcfg). JFrog OSS funciona sem
+    # base URL explícita — usa o Host header de cada requisição.
+
+    - name: Artifactory | Admin password
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::JFrog Admin Password::{{ jfrog_new_admin_password }}"
+
+    - name: Artifactory | Admin access token
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::JFrog Access Token::{{ jfrog_admin_token }}"
+
+    - name: Artifactory | Store credentials in Vault
       ansible.builtin.uri:
         url: "https://{{ vault_host }}/v1/secret/artifactory/admin"
         method: POST
@@ -285,8 +319,11 @@
         body:
           url: "https://{{ artifactory_host }}"
           username: "{{ jfrog_admin_user }}"
-          password: "{{ jfrog_admin_current_password }}"
+          password: "{{ jfrog_new_admin_password }}"
+          access_token: "{{ jfrog_admin_token }}"
+          repo_key: "{{ jfrog_repo_key }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
+
 
