@@ -17,6 +17,16 @@ Este é um procedimento que realiza a configuração completa de um servidor Lin
 
 Conheça mais sobre nosso treinamento em: https://sec4us.com.br/treinamentos/devops-ecosystem-exploits/
 
+## Aviso de Segurança
+
+> [!CAUTION]
+> Este ambiente contém **vulnerabilidades que podem permitir o comprometimento total
+> do servidor** (credenciais padrão, serviços sem hardening e cenários propositalmente
+> exploráveis para as práticas do treinamento). Por esse motivo, **NÃO deve ser
+> disponibilizado publicamente na internet**. Mantenha o lab em rede privada/restrita
+> (VPN, allow-list de IP ou acesso somente via o Squid do próprio lab) enquanto o
+> treinamento estiver em andamento e desligue/derrube o servidor ao final.
+
 ## Ambiente
 
 > [!WARNING] 
