@@ -251,9 +251,12 @@
         body_format: json
         body:
           ci_max_artifact_size_archive: 209715200
-        status_code: [200]
+        status_code: [200, 502, 503, 504]
         validate_certs: false
       register: gitlab_plan_limits
+      until: gitlab_plan_limits.status == 200
+      retries: 30
+      delay: 10
       no_log: true
 
     - name: GitLab | Store credentials
