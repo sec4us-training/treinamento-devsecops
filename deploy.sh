@@ -235,254 +235,77 @@ if [ "$?" != "0" ]; then
     exit 1
 fi
 
-# Step 1 - base
-echo -e "\n${OK} Executando passo 1 - setup_base.yml"
-grep "step1_base" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 1...${W}"
-else
-    if [ `uname -s` == "Darwin" ]; then
+# -----------------------------------------------------------------------------
+# Loop principal de deploy
+# -----------------------------------------------------------------------------
+
+STEP_NUMBER=0
+
+run_step() {
+    local marker="$1"
+    local playbook="$2"
+    local label="$3"
+    local pre_hook="$4"
+
+    STEP_NUMBER=$((STEP_NUMBER + 1))
+
+    echo -e "\n${OK} Executando passo ${STEP_NUMBER} - ${playbook}"
+    if grep -q "${marker}" "$status_file" 2>/dev/null; then
+        echo -e "${DEBUG} ${C}Pulando passo ${STEP_NUMBER}...${W}"
+        return 0
+    fi
+
+    if [ -n "$pre_hook" ] && declare -F "$pre_hook" >/dev/null; then
+        "$pre_hook"
+    fi
+
+    ansible-playbook -i "$ip," \
+        --private-key "$SSH_FILE" \
+        --extra-vars ansible_user="$ansible_user" \
+        --ssh-extra-args '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' \
+        "$playbook"
+
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro executando ansible ${label}${W}\n"
+        info
+        exit 1
+    fi
+
+    echo "${marker}" >> "$status_file"
+    echo -e "${OK} ${G}OK${W}"
+}
+
+fix_password_auth() {
+    if [ "$(uname -s)" = "Darwin" ]; then
         sed -i "" "s/PasswordAuthentication no/PasswordAuthentication yes/g" "setup_base.yml"
     else
         sed -i "s/PasswordAuthentication no/PasswordAuthentication yes/g" "setup_base.yml"
     fi
+}
 
-    ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' setup_base.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible setup base${W}\n"
-        info
-        exit 1
-    fi
-    echo "step1_base" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
+# Cada entrada: "marker|playbook|label|pre_hook(opcional)"
+DEPLOY_STEPS=(
+    "step1_base|setup_base.yml|setup base|fix_password_auth"
+    "step2_tools|setup_tools.yml|tools"
+    "step3_docker|setup_docker.yml|Docker"
+    "step4_vault|install_vault.yml|Vault"
+    "step5_gitlab|install_gitlab.yml|Gitlab"
+    "step6_jfrog|install_jfrog.yml|Artifactory"
+    "step7_sonar|install_sonar.yml|Sonarqube"
+    "step8_web01|install_web01.yml|Web01"
+    "step9_jenkins|install_jenkins.yml|Jenkins"
+    "gitlab_helvio|gitlab_helvio.yml|gitlab_helvio"
+    "gitlab_bank|gitlab_bank.yml|gitlab_bank"
+    "gitlab_sonar_helper|gitlab_sonar_helper.yml|gitlab_sonar_helper"
+    "gitlab_webapi|gitlab_webapi.yml|gitlab_webapi"
+    "gitlab_devsecops|gitlab_devsecops.yml|gitlab_devsecops"
+    "gitlab_runner|gitlab_runner.yml|gitlab_runner"
+)
 
-# Step 2 - Tools
-echo -e "\n${OK} Executando passo 2 - setup_tools.yml"
-grep "step2_tools" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 2...${W}"
-else
-    ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' setup_tools.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible tools${W}\n"
-        info
-        exit 1
-    fi
-    echo "step2_tools" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-
-# Step 3 - Docker Server
-echo -e "\n${OK} Executando passo 3 - setup_docker.yml"
-grep "step3_docker" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 3...${W}"
-else
-    ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' setup_docker.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Docker${W}\n"
-        info
-        exit 1
-    fi
-    echo "step3_docker" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 4 - Hashcorp vault
-echo -e "\n${OK} Executando passo 4 - install_vault.yml"
-grep "step4_vault" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 4...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_vault.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Artifactory${W}\n"
-        info
-        exit 1
-    fi
-    echo "step4_vault" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-
-# Step 5 - Gitlab
-echo -e "\n${OK} Executando passo 5 - install_gitlab.yml"
-grep "step5_gitlab" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 5...${W}"
-else
-    ansible-playbook -i $ip,  --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_gitlab.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Gitlab${W}\n"
-        info
-        exit 1
-    fi
-    echo "step5_gitlab" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 6 - Artifactory
-echo -e "\n${OK} Executando passo 6 - install_jfrog.yml"
-grep "step6_jfrog" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 6...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jfrog.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Artifactory${W}\n"
-        info
-        exit 1
-    fi
-    echo "step6_jfrog" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 7 - Sonarqube
-echo -e "\n${OK} Executando passo 7 - install_sonar.yml"
-grep "step7_sonar" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 7...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_sonar.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Sonarqube${W}\n"
-        info
-        exit 1
-    fi
-    echo "step7_sonar" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 8 - Web01
-echo -e "\n${OK} Executando passo 8 - install_web01.yml"
-grep "step8_web01" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 8...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_web01.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Web01${W}\n"
-        info
-        exit 1
-    fi
-    echo "step8_web01" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 9 - Jenkins
-echo -e "\n${OK} Executando passo 9 - install_jenkins.yml"
-grep "step9_jenkins" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 9...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' install_jenkins.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible Jenkins${W}\n"
-        info
-        exit 1
-    fi
-    echo "step9_jenkins" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-
-# Step 10 - Create Helvio GitLab
-echo -e "\n${OK} Executando passo 10 gitlab_helvio.yml"
-grep "gitlab_helvio" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 10...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_helvio.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_helvio${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_helvio" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 11 - Create Repo BANK
-echo -e "\n${OK} Executando passo 11 gitlab_bank.yml"
-grep "gitlab_bank" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_bank.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_bank${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_bank" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 11 - Create Repo Sonar Helper
-echo -e "\n${OK} Executando passo 11 gitlab_sonar_helper.yml"
-grep "gitlab_sonar_helper" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_sonar_helper.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_sonar_helper${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_sonar_helper" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 11 - Create Repo Web API
-echo -e "\n${OK} Executando passo 11 gitlab_webapi.yml"
-grep "gitlab_webapi" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 11...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_webapi.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_webapi${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_webapi" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 12 - Create gitlab devsecops
-echo -e "\n${OK} Executando passo 12 gitlab_devsecops.yml"
-grep "gitlab_devsecops" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 12...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_devsecops.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_devsecops${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_devsecops" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
-
-# Step 13 - Create gitlab runner
-echo -e "\n${OK} Executando passo 13 gitlab_runner.yml"
-grep "gitlab_runner" "$status_file" >/dev/null 2>&1
-if [ "$?" == "0" ]; then
-    echo -e "${DEBUG} ${C}Pulando passo 13...${W}"
-else
-    ansible-playbook -i $ip, --private-key $SSH_FILE  --extra-vars ansible_user=$ansible_user  --ssh-extra-args '-o StrictHostKeyChecking=no  -o UserKnownHostsFile=/dev/null' gitlab_runner.yml
-    if [ "$?" != "0" ]; then
-        echo -e "${ERROR} ${O} Erro executando ansible gitlab_runner${W}\n"
-        info
-        exit 1
-    fi
-    echo "gitlab_runner" >> "$status_file"
-    echo -e "${OK} ${G}OK${W}"
-fi
+for entry in "${DEPLOY_STEPS[@]}"; do
+    IFS='|' read -r marker playbook label pre_hook <<< "$entry"
+    run_step "$marker" "$playbook" "$label" "$pre_hook"
+done
 
 popd
 
