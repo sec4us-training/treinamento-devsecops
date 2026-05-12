@@ -551,3 +551,17 @@
       no_log: true
 
     - include_tasks: 'jenkins_create_cred.yml'
+
+    - name: Jenkins | Set fact (sonar-token)
+      ansible.builtin.set_fact:
+        json_body:
+          "": "0"
+          credentials:
+            scope: "GLOBAL"
+            id: "sonar-token"
+            secret: "{{ sonar_admin_token }}"
+            description: "SonarQube admin token (Secret Text)"
+            "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"
+      no_log: true
+
+    - include_tasks: 'jenkins_create_cred.yml'

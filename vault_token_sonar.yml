@@ -13,4 +13,5 @@
   set_fact:
     sonar_admin_username: "{{ read_secret.json.data.username }}"
     sonar_admin_password: "{{ read_secret.json.data.password }}"
+    sonar_admin_token: "{{ read_secret.json.data.token }}"
   no_log: true

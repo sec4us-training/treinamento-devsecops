@@ -305,6 +305,55 @@
       register: sonar_auth_new
       when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
 
+    - name: Sonar | Revoke previous admin API token (if any)
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/user_tokens/revoke"
+        method: POST
+        user: "{{ sonar_admin_user }}"
+        password: "{{ sonar_admin_new_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          login: "{{ sonar_admin_user }}"
+          name: "admin-token"
+        status_code: [200, 204, 400, 404]
+        validate_certs: false
+      when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+
+    - name: Sonar | Generate admin API token
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/user_tokens/generate"
+        method: POST
+        user: "{{ sonar_admin_user }}"
+        password: "{{ sonar_admin_new_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          login: "{{ sonar_admin_user }}"
+          name: "admin-token"
+        status_code: [200]
+        validate_certs: false
+      register: sonar_token_resp
+      no_log: true
+      when: (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+
+    - name: Sonar | Set fact with generated API token
+      ansible.builtin.set_fact:
+        sonar_admin_token: "{{ sonar_token_resp.json.token }}"
+      no_log: true
+      when:
+        - (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+        - sonar_token_resp is defined
+        - sonar_token_resp.json is defined
+        - sonar_token_resp.json.token is defined
+
+    - name: Sonar | Fail if API token was not returned
+      ansible.builtin.fail:
+        msg: "SonarQube did not return an API token."
+      when:
+        - (sonar_auth.status == 200) and (sonar_auth.json.valid | default(false))
+        - (sonar_admin_token | default('') | length) == 0
+
     - name: Sonar | Store credentials
       ansible.builtin.uri:
         url: "https://{{ vault_host }}/v1/secret/sonarqube/admin"
@@ -316,6 +365,7 @@
           url: "https://{{ vault_host }}"
           username: "{{ sonar_admin_user }}"
           password: "{{ sonar_admin_new_password }}"
+          token: "{{ sonar_admin_token }}"
         validate_certs: false
         status_code: [200, 204]
       no_log: true
@@ -329,3 +379,11 @@
             if (sonar_auth_new is defined) else
             'skipped (admin/admin not valid or already changed)'
           }}
+
+    - name: Sonar | Admin Token
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Sonar Admin Token::{{ gitlab_root_password }}"
+
+    - name: Sonar | Admin Password
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Sonar Admin Password::{{ sonar_admin_new_password }}"

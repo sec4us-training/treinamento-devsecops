@@ -221,6 +221,19 @@
           charset = utf8
           autocommit = False
 
+    - name: Creating sonar-project.properties
+      copy:
+        dest: "/tmp/bank_git/sonar-project.properties"
+        force: yes
+        content: |
+          sonar.projectKey=sec4us-bank
+          sonar.projectName=Sec4US Bank
+          sonar.projectVersion=1.0
+          sonar.sources=.
+          sonar.exclusions=**/migrations/**,**/__pycache__/**,**/*.pyc,**/.venv/**,**/venv/**
+          sonar.sourceEncoding=UTF-8
+          sonar.python.version=3
+
     - name: Creating Jenkinsfile
       ansible.builtin.copy:
         dest: "/tmp/bank_git/Jenkinsfile"
@@ -240,6 +253,36 @@
                       credentialsId: '{% endraw %}{{credentials_id}}{% raw %}'
                     ]]
                   ])
+                }
+              }
+
+              stage('SonarQube Analysis') {
+                steps {
+                  script {
+                    def scannerHome = tool 'SonarScanner'
+                    // Nome do servidor configurado em "Manage Jenkins > System > SonarQube servers"
+                    withSonarQubeEnv('sonar-labs') {
+                      sh "${scannerHome}/bin/sonar-scanner"
+                    }
+                  }
+                }
+                post {
+                  always {
+                    archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+                  }
+                }
+              }
+
+              stage('Quality Gate') {
+                steps {
+                  script {
+                    timeout(time: 2, unit: 'MINUTES') {
+                      def qg = waitForQualityGate(abortPipeline: false)
+                      if (qg.status != 'OK') {
+                        error "Quality Gate failed: ${qg.status}"
+                      }
+                    }
+                  }
                 }
               }
 
