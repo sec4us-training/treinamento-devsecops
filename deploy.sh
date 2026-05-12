@@ -139,7 +139,7 @@ fi
 echo -e "\n${OK} Realizando o download dos scripts"
 rm -rf /tmp/devsecops || true
 git clone https://github.com/sec4us-training/treinamento-devsecops /tmp/devsecops
-rsync -av /u01/tmp/devsecops/* /tmp/devsecops/
+rsync -av /u01/tmp/devsecops/* /tmp/devsecops/ || true
 pushd /tmp/devsecops
 
 
