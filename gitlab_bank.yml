@@ -21,6 +21,8 @@
         gitlab_project_name: "bank"
         gitlab_project_visibility: "private"
 
+    - include_tasks: 'gitlab_list_projects.yml'
+
     - include_tasks: "create_project.yml"
 
     - name: GitLab | Vault -> Store credentials

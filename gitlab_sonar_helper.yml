@@ -19,8 +19,10 @@
       set_fact:
         gitlab_project_group: "sec4us"
         gitlab_project_name: "sonar_helper"
+        gitlab_group_visibility: "public"
         gitlab_project_visibility: "public"
 
+    - include_tasks: "create_group.yml"
     - include_tasks: "create_project.yml"
 
     - name: GitLab | Check if path exists
@@ -187,7 +189,7 @@
 
     - name: GitLab | Commit
       shell: |
-        cd /tmp/bank_git/
+        cd /tmp/sonar_helper_git/
         git branch -m main
         git add .
         git commit -m "Deploy"

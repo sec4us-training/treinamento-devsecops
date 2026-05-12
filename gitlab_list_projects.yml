@@ -1,0 +1,41 @@
+---
+- name: "List existing groups"
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/groups"
+    method: "GET"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    validate_certs: false
+    return_content: true
+    status_code: [200, 502, 503, 504]
+  register: group_list_output
+  until: group_list_output.status == 200
+  retries: 30
+  delay: 10
+
+- name: "Check if group is already exists"
+  set_fact:
+    group_exists: "{{ gitlab_project_group in (group_list_output.json |\
+      map(attribute='name') | list) }}"
+
+- name: "Get group ID"
+  set_fact:
+    gitlab_project_group_id: "{{ item.id }}"
+  loop: "{{ group_list_output.json }}"
+  when:
+    - group_exists
+    - item.name == gitlab_project_group
+
+- name: GitLab | List existing projects
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects"
+    method: "GET"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    validate_certs: false
+    return_content: true
+    status_code: [200, 502, 503, 504]
+  register: projects_list_output
+  until: projects_list_output.status == 200
+  retries: 30
+  delay: 10

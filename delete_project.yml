@@ -27,7 +27,22 @@
     - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
   no_log: true
 
-- name: "Delete project"
+- name: "Mark project for deletion"
+  uri:
+    url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}"
+    method: "DELETE"
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+    validate_certs: false
+    return_content: true
+    status_code: [202, 204, 404, 400, 502, 503, 504]
+  register: project_mark_delete_output
+  until: project_mark_delete_output.status in [202, 204, 404, 400]
+  retries: 30
+  delay: 10
+  when: project_exists
+
+- name: "Permanently delete project"
   uri:
     url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}?permanently_remove=true&full_path={{ gitlab_project_group }}/{{ gitlab_project_name }}"
     method: "DELETE"
@@ -35,9 +50,9 @@
       PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
     validate_certs: false
     return_content: true
-    status_code: [202, 204, 502, 503, 504]
+    status_code: [202, 204, 404, 502, 503, 504]
   register: project_delete_output
-  until: project_delete_output.status in [202, 204]
+  until: project_delete_output.status in [202, 204, 404]
   retries: 30
   delay: 10
   when: project_exists

@@ -15,25 +15,12 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
-    
     - name: GitLab | Set project name
       set_fact:
         gitlab_project_group: "sec4us"
         gitlab_project_name: "devsecops"
 
-    - name: GitLab | List existing projects
-      uri:
-        url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects"
-        method: "GET"
-        headers:
-          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
-        validate_certs: false
-        return_content: true
-        status_code: [200, 502, 503, 504]
-      register: projects_list_output
-      until: projects_list_output.status == 200
-      retries: 30
-      delay: 10
+    - include_tasks: 'gitlab_list_projects.yml'
 
     - name: "Check if project is already exists"
       set_fact:
