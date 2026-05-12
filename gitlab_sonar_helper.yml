@@ -200,7 +200,7 @@
     - include_tasks: 'vault_token_jenkins.yml'
 
     #Create Sonar helper CI/CD
-    - name: Jenkins | Set fact (Bank CI/CD)
+    - name: Jenkins | Set fact (Sonar Helper CI/CD)
       ansible.builtin.set_fact:
         job_name: "sonar-pipeline"
         job_description: "Sonar Helper pipeline from SCM"
