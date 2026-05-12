@@ -216,3 +216,90 @@
         status_code: [200]
         validate_certs: false
       when: (sonar_jenkins_webhook_existing | length) == 0
+
+    # ------------------------------------------------------------------
+    # Sonar | Quality Gate "Sec4US Strict"
+    # Stricter than the built-in Sonar Way: zero new vulnerabilities/bugs,
+    # 100% hotspot review, all ratings = A, coverage >= 80%, duplication <= 3%.
+    # All conditions are evaluated on NEW code ("Clean as You Code").
+    # ------------------------------------------------------------------
+    - name: Sonar | List existing Quality Gates
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/qualitygates/list"
+        method: GET
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: [200]
+        validate_certs: false
+      register: sonar_qg_list
+
+    - name: Sonar | Determine if "Sec4US Strict" gate already exists
+      ansible.builtin.set_fact:
+        sonar_strict_gate_exists: >-
+          {{
+            ((sonar_qg_list.json.qualitygates | default([]))
+             | selectattr('name', 'equalto', 'Sec4US Strict')
+             | list | length) > 0
+          }}
+
+    - name: Sonar | Create "Sec4US Strict" Quality Gate
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/qualitygates/create"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          name: "Sec4US Strict"
+        status_code: [200]
+        validate_certs: false
+      when: not sonar_strict_gate_exists
+
+    - name: Sonar | Show "Sec4US Strict" current conditions
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/qualitygates/show?name=Sec4US%20Strict"
+        method: GET
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: [200]
+        validate_certs: false
+      register: sonar_strict_gate_show
+
+    - name: Sonar | Set fact with existing condition metrics
+      ansible.builtin.set_fact:
+        sonar_strict_existing_metrics: >-
+          {{
+            (sonar_strict_gate_show.json.conditions | default([]))
+            | map(attribute='metric') | list
+          }}
+
+    - name: Sonar | Add missing conditions to "Sec4US Strict"
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/qualitygates/create_condition"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          gateName: "Sec4US Strict"
+          metric: "{{ item.metric }}"
+          op: "{{ item.op }}"
+          error: "{{ item.error }}"
+        status_code: [200, 400]
+        validate_certs: false
+      loop:
+        - { metric: "new_security_rating",            op: "GT", error: "1" }
+        - { metric: "new_vulnerabilities",            op: "GT", error: "0" }
+        - { metric: "new_security_hotspots_reviewed", op: "LT", error: "100" }
+        - { metric: "new_reliability_rating",         op: "GT", error: "1" }
+        - { metric: "new_bugs",                       op: "GT", error: "0" }
+        - { metric: "new_maintainability_rating",     op: "GT", error: "1" }
+        - { metric: "new_coverage",                   op: "LT", error: "80" }
+        - { metric: "new_duplicated_lines_density",   op: "GT", error: "3" }
+      when: item.metric not in sonar_strict_existing_metrics

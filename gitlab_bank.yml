@@ -377,6 +377,22 @@
         validate_certs: false
       when: (sonar_search.json.components | length) == 0
 
+    # The "Sec4US Strict" Quality Gate is created instance-wide by
+    # install_jenkins_sonar.yml. Here we just bind it to this project.
+    - name: Sonar | Bind project "{{ sonar_project_key }}" to "Sec4US Strict" Quality Gate
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/qualitygates/select"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          gateName: "Sec4US Strict"
+          projectKey: "{{ sonar_project_key }}"
+        status_code: [200, 204]
+        validate_certs: false
+
     - name: Sonar | Revoke previous project token (if any)
       ansible.builtin.uri:
         url: "https://{{ sonar_host }}/api/user_tokens/revoke"
