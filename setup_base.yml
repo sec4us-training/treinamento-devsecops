@@ -110,9 +110,47 @@
     - name: Extending Volume
       ignore_errors: yes
       shell: |
+        set +e
+
+        # 0) Garante 'growpart' (vem em cloud-guest-utils, ja presente
+        #    nos AMIs cloud por padrao, mas instala se faltar).
+        command -v growpart >/dev/null 2>&1 || \
+          DEBIAN_FRONTEND=noninteractive apt-get install -y cloud-guest-utils
+
+        # 1) Layout antes (diagnostico)
+        echo "--- lsblk (antes) ---"
+        lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT
+        echo "--- pvs (antes) ---"
+        pvs 2>/dev/null
+
+        # 2) Para cada PV LVM, cresce a particao do host e o proprio PV.
+        #    Necessario quando o disco subjacente (EBS, etc) foi
+        #    aumentado mas a particao/PV ainda nao viu o espaco.
+        for pv in $(pvs --noheadings -o pv_name 2>/dev/null | tr -d ' '); do
+          [ -z "$pv" ] && continue
+          disk=$(lsblk -no PKNAME "$pv" 2>/dev/null | head -1)
+          # part_num = digitos finais (cobre /dev/sdaN e /dev/nvme0n1pN)
+          part_num=$(echo "$pv" | sed -E 's|.*[^0-9]([0-9]+)$|\1|')
+          if [ -n "$disk" ] && [ -n "$part_num" ]; then
+            echo "+ growpart /dev/$disk $part_num"
+            growpart "/dev/$disk" "$part_num"   # retorna != 0 se NOCHANGE
+            echo "+ pvresize $pv"
+            pvresize "$pv"
+          fi
+        done
+
+        # 3) Estende o LV e cresce o filesystem (logica original)
         lv_path=$(lvdisplay | grep -i 'LV Path' | grep -oE '/dev.*')
-        lvextend -l+100%FREE $lv_path
-        resize2fs $lv_path
+        if [ -n "$lv_path" ]; then
+          echo "+ lvextend -l+100%FREE $lv_path"
+          lvextend -l+100%FREE "$lv_path"
+          echo "+ resize2fs $lv_path"
+          resize2fs "$lv_path"
+        fi
+
+        # 4) Layout depois
+        echo "--- lsblk (depois) ---"
+        lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINT
 
     - name: Base | Install a list of packages
       apt:
