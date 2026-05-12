@@ -96,6 +96,10 @@
         pkg:
           - libwacom-common
           - python3-apt
+      register: deploy_deps_install
+      retries: 3
+      delay: 5
+      until: deploy_deps_install is succeeded
 
     - name: Base | Update all packages to their latest version
       ignore_errors: yes
@@ -153,6 +157,10 @@
         - default-jdk 
         - libmagic-dev 
         - git
+      register: deploy_apt_install
+      retries: 3
+      delay: 5
+      until: deploy_apt_install is succeeded
 
     - name: Base | Change default user password
       shell: echo {{ local_username }}:{{ default_password }} | chpasswd
