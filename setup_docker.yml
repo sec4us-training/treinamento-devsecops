@@ -74,6 +74,44 @@
         groups: docker
         append: true
 
+    # ---------------------------------------------------------------
+    # Docker daemon | escuta TCP 2375 alem do unix socket
+    # ATENCAO: 2375 e SEM TLS/auth. Qualquer um com acesso de rede
+    # tem root via docker. Usar somente em laboratorio isolado.
+    # ---------------------------------------------------------------
+    - name: Docker | Create systemd drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Docker | Expose daemon on TCP 2375 (+ keep unix socket)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/docker.service.d/override.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd --containerd=/run/containerd/containerd.sock -H unix:///var/run/docker.sock -H tcp://0.0.0.0:2375
+      register: docker_override
+
+    - name: Docker | Reload systemd and restart daemon (only if override changed)
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+        daemon_reload: true
+      when: docker_override.changed
+
+    - name: Docker | Wait for TCP 2375 to be reachable
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 2375
+        timeout: 60
+
 
     - name: Docker | Configuring NGINX
       copy:

@@ -1,0 +1,257 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    GITLAB_HOME: /u01/gitlab
+    gitlab_external_url:
+    gitlab_api_version:
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+    - include_tasks: 'vault_token_gitlab.yml'
+
+    - name: GitLab | Set project name
+      set_fact:
+        gitlab_project_group: "sec4us"
+        gitlab_project_name: "intelparser"
+        gitlab_project_visibility: "public"
+
+    - include_tasks: 'gitlab_list_projects.yml'
+
+    - include_tasks: "delete_project.yml"
+
+    - include_tasks: "create_project.yml"
+
+    - name: GitLab | Check if path exists
+      stat:
+        path: /tmp/intelparser_git/
+      register: git_path
+
+    - name: GitLab | Git clone (preserve history, swap origin)
+      shell: |
+        git config --global user.name "Helvio Junior"
+        git config --global user.email "helvio@labs.sec4us.com.br"
+        chmod 600 "{{ GITLAB_HOME }}/id_rsa_root" || true
+
+        cd /tmp
+        rm -rf /tmp/intelparser_git/
+        git clone https://github.com/helviojunior/intelparser.git /tmp/intelparser_git
+
+        cd /tmp/intelparser_git/
+        git remote set-url origin "git@{{gitlab_host}}:sec4us/intelparser.git"
+        # Garante que a branch corrente se chama 'main' (origem pode ser 'master')
+        git branch -m main 2>/dev/null || true
+      ignore_errors: false
+      become: yes
+      when: not git_path.stat.exists
+
+    - name: Creating .gitlab-ci.yml
+      ansible.builtin.copy:
+        dest: "/tmp/intelparser_git/.gitlab-ci.yml"
+        force: true
+        content: |
+          stages:
+            - build
+            - publish
+
+          variables:
+            DOCKER_HOST: "tcp://host.docker.internal:2375"
+            GOFLAGS: "-mod=readonly"
+            CGO_ENABLED: "0"
+            ARTIFACT_GROUP: "com/sec4us/lab"
+            ARTIFACT_ID: "intelparser"
+            JFROG_URL: "https://{{ artifactory_host }}"
+            JFROG_REPO: "{{ jfrog_repo_key }}"
+
+          build:
+            stage: build
+            image: golang:1.25
+            script:
+              - go version
+              - go env GOPATH GOCACHE
+              - go mod download
+              - go build -ldflags="-s -w" -o ${ARTIFACT_ID} ./...
+              - file ${ARTIFACT_ID} || ls -la ${ARTIFACT_ID}
+            artifacts:
+              paths:
+                - ${ARTIFACT_ID}
+              expire_in: 1 week
+            tags:
+              - docker
+
+          publish:
+            stage: publish
+            image: alpine:3.20
+            needs:
+              - build
+            variables:
+              VAULT_SECRET_PATH: "secret/artifactory/admin"
+            before_script:
+              - apk add --no-cache curl jq ca-certificates
+            script:
+              - |
+                set -eu
+                echo ">> Fetching JFrog credentials from Vault (${VAULT_ADDR})"
+                SECRET="$(curl -fsSL -k \
+                  -H "X-Vault-Token: ${VAULT_TOKEN}" \
+                  "${VAULT_ADDR}/v1/${VAULT_SECRET_PATH}")"
+                JFROG_USER="$(echo "${SECRET}" | jq -r '.data.username')"
+                JFROG_PASS="$(echo "${SECRET}" | jq -r '.data.password')"
+                [ -n "${JFROG_USER}" ] && [ -n "${JFROG_PASS}" ] || \
+                  { echo "ERR: vazio em ${VAULT_SECRET_PATH}"; exit 1; }
+
+                VERSION="${CI_COMMIT_SHORT_SHA}"
+                BASE="${JFROG_URL}/artifactory/${JFROG_REPO}/${ARTIFACT_GROUP}/${ARTIFACT_ID}/${VERSION}"
+                echo ">> Uploading ${ARTIFACT_ID} -> ${BASE}/${ARTIFACT_ID}"
+                curl -fsSL -k -u "${JFROG_USER}:${JFROG_PASS}" \
+                  -T "${ARTIFACT_ID}" \
+                  "${BASE}/${ARTIFACT_ID}"
+                echo ">> Also tagging as 'latest'"
+                curl -fsSL -k -u "${JFROG_USER}:${JFROG_PASS}" \
+                  -T "${ARTIFACT_ID}" \
+                  "${JFROG_URL}/artifactory/${JFROG_REPO}/${ARTIFACT_GROUP}/${ARTIFACT_ID}/latest/${ARTIFACT_ID}"
+            tags:
+              - docker
+
+    - name: GitLab | Commit + push (force, history do GitHub > initial do GitLab)
+      shell: |
+        cd /tmp/intelparser_git/
+        git checkout -B main
+        # Adiciona o .gitlab-ci.yml gerado pelo Ansible em cima da history original
+        git add .gitlab-ci.yml
+        git commit -m "Add GitLab CI pipeline" || true
+        GIT_SSH_COMMAND="ssh -i {{ GITLAB_HOME }}/id_rsa_root -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git push -u origin main
+      ignore_errors: false
+
+    - name: GitLab | List existing projects
+      uri:
+        url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/projects"
+        method: "GET"
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        validate_certs: false
+        return_content: true
+        status_code: [200, 502, 503, 504]
+      register: projects_list_output
+      until: projects_list_output.status == 200
+      retries: 30
+      delay: 10
+
+    - name: "Check if project is already exists"
+      set_fact:
+        project_exists: "{{ gitlab_project_group + '/' + gitlab_project_name in\
+          (projects_list_output.json | map(attribute='path_with_namespace')  | list) }}"
+
+    - name: GitLab | Get project ID
+      set_fact:
+        gitlab_project_id: "{{ item.id }}"
+      loop: "{{ projects_list_output.json }}"
+      when:
+        - project_exists
+        - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
+
+    # ---------------------------------------------------------------
+    # Vault | scoped policy + token (read-only em secret/artifactory/admin)
+    # NAO usar o root token na pipeline. Aqui o root cria uma policy
+    # restrita e emite um token com apenas essa policy.
+    # ---------------------------------------------------------------
+    - name: Vault | Create read-only policy 'intelparser-jfrog-read'
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/sys/policies/acl/intelparser-jfrog-read"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          policy: |
+            path "secret/artifactory/admin" {
+              capabilities = ["read"]
+            }
+        validate_certs: false
+        status_code: [200, 204]
+
+    - name: Vault | Issue scoped token (read-only, 1y TTL, no default policy)
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/auth/token/create"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          policies: ["intelparser-jfrog-read"]
+          ttl: "8760h"
+          renewable: true
+          no_default_policy: true
+          display_name: "intelparser-ci"
+        validate_certs: false
+        status_code: [200]
+      register: intelparser_vault_token_resp
+      no_log: true
+
+    - name: Vault | Set scoped token fact
+      ansible.builtin.set_fact:
+        intelparser_vault_token: "{{ intelparser_vault_token_resp.json.auth.client_token }}"
+      no_log: true
+
+    - name: Vault | Fail if scoped token was not returned
+      ansible.builtin.fail:
+        msg: "Vault did not return a client_token for intelparser-jfrog-read."
+      when: (intelparser_vault_token | default('') | length) == 0
+
+    # ---------------------------------------------------------------
+    # Vault address + token as project-level CI/CD variables.
+    # VAULT_TOKEN abaixo eh o token ESCOPED (so le secret/artifactory/admin),
+    # nao o root. A pipeline (.gitlab-ci.yml) usa esse token para
+    # buscar JFROG_USER/JFROG_PASS em runtime.
+    # ---------------------------------------------------------------
+    - name: GitLab | Create CI/CD variable VAULT_ADDR
+      ansible.builtin.uri:
+        url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        body_format: form-urlencoded
+        body:
+          key: "VAULT_ADDR"
+          value: "https://{{ vault_host }}"
+          variable_type: "env_var"
+          environment_scope: "*"
+          protected: "false"
+          masked: "false"
+          raw: "true"
+          description: "HashiCorp Vault URL"
+        status_code: [201, 400, 409, 502, 503, 504]
+        validate_certs: false
+      register: create_vault_addr_var
+      until: create_vault_addr_var.status in [201, 400, 409]
+      retries: 30
+      delay: 10
+
+    - name: GitLab | Create CI/CD variable VAULT_TOKEN
+      ansible.builtin.uri:
+        url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        body_format: form-urlencoded
+        body:
+          key: "VAULT_TOKEN"
+          value: "{{ intelparser_vault_token }}"
+          variable_type: "env_var"
+          environment_scope: "*"
+          protected: "false"
+          masked: "true"
+          raw: "true"
+          description: "Vault scoped token (read secret/artifactory/admin only)"
+        status_code: [201, 400, 409, 502, 503, 504]
+        validate_certs: false
+      register: create_vault_token_var
+      until: create_vault_token_var.status in [201, 400, 409]
+      retries: 30
+      delay: 10
+      no_log: true

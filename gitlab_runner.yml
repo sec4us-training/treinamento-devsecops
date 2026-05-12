@@ -3,10 +3,13 @@
   become: yes
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
-    runner_description: "docker-runner-devsecops"
-    runner_tags: "docker,linux"
+    shell_runner_description: "shell-runner-devsecops"
+    shell_runner_tags: "shell,linux,ci"
+
+    docker_runner_description: "docker-runner-devsecops"
+    docker_runner_tags: "docker,linux,dind"
+
     runner_locked: false
-    runner_run_untagged: true
     runner_access_level: "not_protected"   # or "ref_protected" depending on your policy
     runner_home: "/u01/runner"
 
@@ -18,7 +21,7 @@
     - include_tasks: 'vault_token.yml'
     - include_tasks: 'vault_token_gitlab.yml'
 
-    - name: GitLab | Create instance runner configuration (returns glrt token once)
+    - name: GitLab | Register shell runner (returns glrt token once)
       ansible.builtin.uri:
         url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/user/runners"
         method: POST
@@ -27,23 +30,51 @@
         body_format: form-urlencoded
         body:
           runner_type: "instance_type"
-          description: "{{ runner_description }}"
-          tag_list: "{{ runner_tags }}"
+          description: "{{ shell_runner_description }}"
+          tag_list: "{{ shell_runner_tags }}"
           locked: "{{ runner_locked | ternary('true','false') }}"
-          run_untagged: "{{ runner_run_untagged | ternary('true','false') }}"
+          run_untagged: "true"
           access_level: "{{ runner_access_level }}"
         status_code: [201, 502, 503, 504]
         return_content: true
         validate_certs: false
-      register: create_runner
-      until: create_runner.status == 201
+      register: create_shell_runner
+      until: create_shell_runner.status == 201
       retries: 30
       delay: 10
       no_log: true
 
-    - name: GitLab | Set runner auth token fact (glrt-...)
+    - name: GitLab | Set shell runner auth token fact
       ansible.builtin.set_fact:
-        runner_auth_token: "{{ create_runner.json.token }}"
+        shell_runner_auth_token: "{{ create_shell_runner.json.token }}"
+      no_log: true
+
+    - name: GitLab | Register docker runner (returns glrt token once)
+      ansible.builtin.uri:
+        url: "{{ gitlab_external_url }}/api/{{ gitlab_api_version }}/user/runners"
+        method: POST
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
+        body_format: form-urlencoded
+        body:
+          runner_type: "instance_type"
+          description: "{{ docker_runner_description }}"
+          tag_list: "{{ docker_runner_tags }}"
+          locked: "{{ runner_locked | ternary('true','false') }}"
+          run_untagged: "false"
+          access_level: "{{ runner_access_level }}"
+        status_code: [201, 502, 503, 504]
+        return_content: true
+        validate_certs: false
+      register: create_docker_runner
+      until: create_docker_runner.status == 201
+      retries: 30
+      delay: 10
+      no_log: true
+
+    - name: GitLab | Set docker runner auth token fact
+      ansible.builtin.set_fact:
+        docker_runner_auth_token: "{{ create_docker_runner.json.token }}"
       no_log: true
     
     - name: GitLab | Stop service, if exists
@@ -112,33 +143,68 @@
             session_timeout = 1800
 
           # =========================
-          # Runner definition
+          # Runner 1 - shell executor (mantido)
           # =========================
           [[runners]]
             name = "shell-runner-sec4us"
             url = "https://{{gitlab_host}}"
-
-            # Runner authentication token (glrt-...)
-            token = "{{runner_auth_token}}"
-
+            token = "{{shell_runner_auth_token}}"
             executor = "shell"
-
-            # Tags control which jobs can land here
             tags = ["shell", "linux", "ci"]
             run_untagged = true
             locked = false
             access_level = "not_protected"
-
             output_limit = 40960
-
-            # Environment variables available to jobs
             environment = [
               "TZ=America/Sao_Paulo"
             ]
 
-            # =========================
-            # Cache configuration
-            # =========================
+            [runners.cache]
+              Type = "filesystem"
+              Path = "/srv/gitlab-runner/cache"
+              Shared = true
+
+          # =========================
+          # Runner 2 - docker executor (com DinD)
+          # =========================
+          #  - privileged = true: exigido para 'services: docker:dind' funcionar.
+          #  - docker.sock montado: permite jobs interagirem com o engine do host
+          #    (DooD opcional). DinD via service ja funciona sem isso.
+          #  - extra_hosts: replicam o /etc/hosts do host pros containers de job
+          #    poderem resolver os servicos internos do lab.
+          [[runners]]
+            name = "docker-runner-sec4us"
+            url = "https://{{gitlab_host}}"
+            token = "{{docker_runner_auth_token}}"
+            executor = "docker"
+            tags = ["docker", "linux", "dind"]
+            run_untagged = false
+            locked = false
+            access_level = "not_protected"
+            output_limit = 40960
+            environment = [
+              "TZ=America/Sao_Paulo"
+            ]
+
+            [runners.docker]
+              image = "ubuntu:jammy"
+              privileged = true
+              pull_policy = ["if-not-present"]
+              volumes = [
+                "/cache",
+                "/var/run/docker.sock:/var/run/docker.sock"
+              ]
+              extra_hosts = [
+                "host.docker.internal:host-gateway",
+                "{{vault_host}}:host-gateway",
+                "{{gitlab_host}}:host-gateway",
+                "{{artifactory_host}}:host-gateway",
+                "{{jenkins_host}}:host-gateway",
+                "{{sonar_host}}:host-gateway",
+                "{{web01_host}}:host-gateway",
+                "{{registry_host}}:host-gateway"
+              ]
+
             [runners.cache]
               Type = "filesystem"
               Path = "/srv/gitlab-runner/cache"
@@ -241,12 +307,12 @@
         cd {{ runner_home }}
         docker compose up -d
 
-    - name: GitLab | Wait for container to be running
-      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jenkins
-      register: jenkins_running
+    - name: GitLab | Wait for runner container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' gitlab-runner
+      register: runner_running
       retries: 60
       delay: 10
-      until: jenkins_running.stdout == "true"
+      until: runner_running.stdout == "true"
       changed_when: false
 
 

@@ -303,6 +303,7 @@ DEPLOY_STEPS=(
     "setup_base|setup_base.yml|setup base|Setup base do sistema"
     "setup_tools|setup_tools.yml|Setup de ferramentas Linux"
     "setup_docker|setup_docker.yml|Setup do Docker"
+    
     "install_vault|install_vault.yml|Instalar HashiCorp Vault"
     "install_gitlab|install_gitlab.yml|Instalar GitLab"
     "install_jfrog|install_jfrog.yml|Instalar JFrog Artifactory"
@@ -310,12 +311,16 @@ DEPLOY_STEPS=(
     "install_jenkins|install_jenkins.yml|Instalar Jenkins"
     "install_jenkins_sonar|install_jenkins_sonar.yml|Jenkins-Sonar integration"
     "install_web01|install_web01.yml|Instalar Web01"
+    
+    "gitlab_runner|gitlab_runner.yml|Configurar GitLab Runner"
+
     "gitlab_helvio|gitlab_helvio.yml|Criar repositório GitLab (Helvio)"
     "gitlab_bank|gitlab_bank.yml|Criar repositório GitLab (Bank)"
     "gitlab_sonar_helper|gitlab_sonar_helper.yml|Criar repositório GitLab (Sonar Helper)"
     "gitlab_webapi|gitlab_webapi.yml|Criar repositório GitLab (WebAPI)"
     "gitlab_devsecops|gitlab_devsecops.yml|Criar repositório GitLab (DevSecOps)"
-    "gitlab_runner|gitlab_runner.yml|Configurar GitLab Runner"
+    "gitlab_intelparser|gitlab_intelparser.yml|Criar repositório GitLab (IntelParser)"
+    
 )
 
 for entry in "${DEPLOY_STEPS[@]}"; do
