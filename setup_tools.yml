@@ -156,3 +156,16 @@
         executable: /bin/bash
       ignore_errors: yes
 
+    - name: Tools | Terraform
+      shell: |
+        cd /tmp
+        rm -rf terraform.zip terraform
+        curl -sSL https://releases.hashicorp.com/terraform/1.15.2/terraform_1.15.2_linux_amd64.zip -o terraform.zip
+        unzip -o -q terraform.zip
+        mv terraform /usr/local/bin
+        rm -rf terraform.zip terraform
+        exit 0
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
