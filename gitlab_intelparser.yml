@@ -75,7 +75,7 @@
               - go version
               - go env GOPATH GOCACHE
               - go mod download
-              - go build -ldflags="-s -w" -o ${ARTIFACT_ID} ./...
+              - go build -ldflags="-s -w" -o ${ARTIFACT_ID} .
               - file ${ARTIFACT_ID} || ls -la ${ARTIFACT_ID}
             artifacts:
               paths:
