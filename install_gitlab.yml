@@ -243,13 +243,14 @@
     # 413. Default is 5 MB, too small for a stripped Go binary (~39 MB).
     - name: GitLab | Raise plan-limit ci_max_artifact_size_archive
       ansible.builtin.uri:
-        url: "https://{{ gitlab_host }}/api/v4/application/plan_limits?plan_name=default"
+        url: "https://{{ gitlab_host }}/api/v4/application/plan_limits"
         method: PUT
         headers:
           PRIVATE-TOKEN: "{{ gitlab_root_token }}"
           Content-Type: "application/json"
         body_format: json
         body:
+          plan_name: "default"
           ci_max_artifact_size_archive: 209715200
         status_code: [200, 502, 503, 504]
         validate_certs: false
@@ -257,7 +258,6 @@
       until: gitlab_plan_limits.status == 200
       retries: 30
       delay: 10
-      no_log: true
 
     - name: GitLab | Store credentials
       ansible.builtin.uri:
