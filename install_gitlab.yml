@@ -26,6 +26,10 @@
               ssl_certificate      /etc/nginx/certs/ssl.cer;
               ssl_certificate_key  /etc/nginx/certs/ssl.key;
 
+              # Override the 10m global cap so CI artifact / LFS / Git push
+              # uploads aren't 413'd at the host nginx before reaching GitLab.
+              client_max_body_size 500m;
+
               root /dev/null;
               index index.html index.htm;
               try_files $uri $uri/ $uri/404 =404;
