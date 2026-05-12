@@ -217,7 +217,7 @@
       debug:
         msg: "__SEC4US_CRED__::GitLab Token::{{ gitlab_root_token }}"
 
-    - name: Disable Auto DevOps globally (instance level)
+    - name: GitLab | Apply instance-level application settings
       ansible.builtin.uri:
         url: "https://{{ gitlab_host }}/api/v4/application/settings"
         method: PUT
@@ -227,6 +227,7 @@
         body_format: json
         body:
           auto_devops_enabled: false
+          max_artifacts_size: 200
         status_code: [200]
         validate_certs: false
       register: gitlab_settings
