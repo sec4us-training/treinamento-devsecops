@@ -382,7 +382,7 @@
 
     - name: Sonar | Admin Token
       ansible.builtin.debug:
-        msg: "__SEC4US_CRED__::Sonar Admin Token::{{ gitlab_root_password }}"
+        msg: "__SEC4US_CRED__::Sonar Admin Token::{{ sonar_admin_token }}"
 
     - name: Sonar | Admin Password
       ansible.builtin.debug:

@@ -3,20 +3,11 @@
   become: yes
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
-    GITLAB_HOME: /u01/gitlab
-    gitlab_external_url:
-    gitlab_api_version:
 
     sonar_server_name: "sonar-labs"
     sonar_server_credentials_id: "sonar-token"
     sonar_scanner_tool_name: "SonarScanner"
     sonar_scanner_version: "6.2.1.4610"
-
-    sonar_project_key: "sec4us-bank"
-    sonar_project_name: "Sec4US Bank"
-    sonar_project_visibility: "private"
-    sonar_project_token_name: "sec4us-bank-token"
-
     sonar_jenkins_webhook_name: "Jenkins"
     sonar_jenkins_webhook_url: "https://{{ jenkins_host }}/sonarqube-webhook/"
 
@@ -26,13 +17,12 @@
   tasks:
     - include_tasks: 'user_details.yml'
     - include_tasks: 'vault_token.yml'
-    - include_tasks: 'vault_token_gitlab.yml'
     - include_tasks: 'vault_token_jenkins.yml'
     - include_tasks: 'vault_token_sonar.yml'
 
     # ------------------------------------------------------------------
-    # 1) Jenkins: Manage Jenkins > System > SonarQube servers
-    #    + Global Tool Configuration > SonarScanner
+    # Sonar | Jenkins: Manage Jenkins > System > SonarQube servers
+    #               + Global Tool Configuration > SonarScanner
     # ------------------------------------------------------------------
     - name: Jenkins | Get crumb (CSRF token)
       ansible.builtin.uri:
@@ -74,18 +64,64 @@
             import hudson.plugins.sonar.SonarGlobalConfiguration
             import hudson.plugins.sonar.SonarInstallation
             import hudson.plugins.sonar.model.TriggersConfig
+            import hudson.util.Secret
 
             def cfg = Jenkins.instance.getDescriptorByType(SonarGlobalConfiguration.class)
-            def inst = new SonarInstallation(
-              "{{ sonar_server_name }}",
-              "https://{{ sonar_host }}",
-              "{{ sonar_server_credentials_id }}",
-              "",
-              "",
-              "",
-              "",
-              new TriggersConfig()
-            )
+            def name    = "{{ sonar_server_name }}"
+            def url     = "https://{{ sonar_host }}"
+            def credId  = "{{ sonar_server_credentials_id }}"
+            def trig    = new TriggersConfig()
+
+            // Assinaturas historicas do construtor (descobertas por reflection):
+            //   v2.18+ (9-arg, com Secret webhookSecret e credentialsBindingId):
+            //     name, serverUrl, credentialsId, Secret webhookSecret,
+            //     mojoVersion, additionalProperties,
+            //     additionalAnalysisProperties, credentialsBindingId, triggers
+            //   v2.13-2.17 (8-arg, todas String + TriggersConfig):
+            //     name, serverUrl, credentialsId, webhookSecretId,
+            //     mojoVersion, additionalProperties,
+            //     additionalAnalysisProperties, triggers
+            //   7-arg legado (ordem incomum, triggers na pos 5):
+            //     name, serverUrl, credentialsId, mojoVersion,
+            //     additionalProperties, triggers, additionalAnalysisProperties
+            //   v2.10-2.12 (7-arg, todas String + TriggersConfig na pos 6):
+            //     name, serverUrl, credentialsId, mojoVersion,
+            //     additionalProperties, additionalAnalysisProperties, triggers
+            //   v2.5-2.9 (7-arg com boolean disabled na pos 1):
+            //     name, disabled, serverUrl, credentialsId, mojoVersion,
+            //     additionalProperties, triggers
+            def inst = null
+            def attempts = []
+            for (ctor in SonarInstallation.class.getDeclaredConstructors().sort { -it.parameterCount }) {
+              def types = ctor.getParameterTypes()
+              def n = types.length
+              def args = null
+              if (n == 9 && types[3] == Secret.class) {
+                args = [name, url, credId, null, "", "", "", "", trig]
+              } else if (n == 8 && types[1] == String.class) {
+                args = [name, url, credId, "", "", "", "", trig]
+              } else if (n == 7 && types[5] == TriggersConfig.class) {
+                args = [name, url, credId, "", "", trig, ""]
+              } else if (n == 7 && types[1] == String.class) {
+                args = [name, url, credId, "", "", "", trig]
+              } else if (n == 7 && types[1] == Boolean.TYPE) {
+                args = [name, false, url, credId, "", "", trig]
+              }
+              if (args == null) {
+                attempts << "${n}-arg(${types.collect{it.simpleName}.join(',')}): nao suportado"
+                continue
+              }
+              try {
+                inst = ctor.newInstance(args as Object[])
+                break
+              } catch (Throwable t) {
+                attempts << "${n}-arg(${types.collect{it.simpleName}.join(',')}): ${t.message}"
+              }
+            }
+            if (inst == null) {
+              throw new RuntimeException("Cannot build SonarInstallation. Tried: " + attempts.join(" | "))
+            }
+
             cfg.setInstallations([inst] as SonarInstallation[])
             cfg.setBuildWrapperEnabled(true)
             cfg.save()
@@ -128,7 +164,7 @@
         (jenkins_scanner_cfg.content | default('') | trim) != 'OK'
 
     # ------------------------------------------------------------------
-    # 2) SonarQube webhook -> Jenkins (required for waitForQualityGate)
+    # Sonar | webhook -> Jenkins (required for waitForQualityGate)
     # ------------------------------------------------------------------
     - name: Sonar | List existing webhooks (global)
       ansible.builtin.uri:
@@ -180,101 +216,3 @@
         status_code: [200]
         validate_certs: false
       when: (sonar_jenkins_webhook_existing | length) == 0
-
-    # ------------------------------------------------------------------
-    # 3) SonarQube: create project + project analysis token + store in Vault
-    # ------------------------------------------------------------------
-    - name: Sonar | Check if project "{{ sonar_project_key }}" already exists
-      ansible.builtin.uri:
-        url: "https://{{ sonar_host }}/api/projects/search?projects={{ sonar_project_key }}"
-        method: GET
-        user: "{{ sonar_admin_username }}"
-        password: "{{ sonar_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-        status_code: [200]
-        validate_certs: false
-      register: sonar_search
-
-    - name: Sonar | Create project "{{ sonar_project_name }}"
-      ansible.builtin.uri:
-        url: "https://{{ sonar_host }}/api/projects/create"
-        method: POST
-        user: "{{ sonar_admin_username }}"
-        password: "{{ sonar_admin_password }}"
-        force_basic_auth: true
-        body_format: form-urlencoded
-        body:
-          name: "{{ sonar_project_name }}"
-          project: "{{ sonar_project_key }}"
-          visibility: "{{ sonar_project_visibility }}"
-        status_code: [200]
-        validate_certs: false
-      when: (sonar_search.json.components | length) == 0
-
-    - name: Sonar | Revoke previous project token (if any)
-      ansible.builtin.uri:
-        url: "https://{{ sonar_host }}/api/user_tokens/revoke"
-        method: POST
-        user: "{{ sonar_admin_username }}"
-        password: "{{ sonar_admin_password }}"
-        force_basic_auth: true
-        body_format: form-urlencoded
-        body:
-          login: "{{ sonar_admin_username }}"
-          name: "{{ sonar_project_token_name }}"
-        status_code: [200, 204, 400, 404]
-        validate_certs: false
-
-    - name: Sonar | Generate project analysis token
-      ansible.builtin.uri:
-        url: "https://{{ sonar_host }}/api/user_tokens/generate"
-        method: POST
-        user: "{{ sonar_admin_username }}"
-        password: "{{ sonar_admin_password }}"
-        force_basic_auth: true
-        body_format: form-urlencoded
-        body:
-          name: "{{ sonar_project_token_name }}"
-          type: "PROJECT_ANALYSIS_TOKEN"
-          projectKey: "{{ sonar_project_key }}"
-        status_code: [200]
-        validate_certs: false
-      register: sonar_project_token_resp
-      no_log: true
-
-    - name: Sonar | Set fact with project token
-      ansible.builtin.set_fact:
-        sonar_project_token: "{{ sonar_project_token_resp.json.token }}"
-      no_log: true
-
-    - name: Sonar | Fail if project token was not returned
-      ansible.builtin.fail:
-        msg: "SonarQube did not return a project analysis token."
-      when: (sonar_project_token | default('') | length) == 0
-
-    - name: Sonar | Store project token in Vault (secret/sonarqube/projects/{{ sonar_project_key }})
-      ansible.builtin.uri:
-        url: "https://{{ vault_host }}/v1/secret/sonarqube/projects/{{ sonar_project_key }}"
-        method: POST
-        headers:
-          X-Vault-Token: "{{ vault_token }}"
-        body_format: json
-        body:
-          url: "https://{{ sonar_host }}"
-          project_key: "{{ sonar_project_key }}"
-          project_name: "{{ sonar_project_name }}"
-          token_name: "{{ sonar_project_token_name }}"
-          token: "{{ sonar_project_token }}"
-        validate_certs: false
-        status_code: [200, 204]
-      no_log: true
-
-    - name: Sonar | Show summary
-      ansible.builtin.debug:
-        msg:
-          - "Jenkins SonarQube server '{{ sonar_server_name }}' -> https://{{ sonar_host }} (credentials: {{ sonar_server_credentials_id }})"
-          - "Jenkins tool '{{ sonar_scanner_tool_name }}' -> SonarScanner {{ sonar_scanner_version }}"
-          - "SonarQube webhook '{{ sonar_jenkins_webhook_name }}' -> {{ sonar_jenkins_webhook_url }}"
-          - "SonarQube project '{{ sonar_project_name }}' (key: {{ sonar_project_key }})"
-          - "Project token stored at vault path: secret/sonarqube/projects/{{ sonar_project_key }}"

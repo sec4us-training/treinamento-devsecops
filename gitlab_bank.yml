@@ -4,8 +4,13 @@
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
     GITLAB_HOME: /u01/gitlab
-    gitlab_external_url: 
-    gitlab_api_version: 
+    gitlab_external_url:
+    gitlab_api_version:
+
+    sonar_project_key: "sec4us-bank"
+    sonar_project_name: "Sec4US Bank"
+    sonar_project_visibility: "private"
+    sonar_project_token_name: "sec4us-bank-token"
 
   vars_files:
     - vars.yml
@@ -337,6 +342,98 @@
       ignore_errors: false
 
     - include_tasks: 'vault_token_jenkins.yml'
+    - include_tasks: 'vault_token_sonar.yml'
+
+    # ------------------------------------------------------------------
+    # Sonar | create project + project analysis token + store in Vault
+    # (Server SonarQube, SonarScanner tool e webhook são configurados
+    #  globalmente em install_jenkins.yml)
+    # ------------------------------------------------------------------
+    - name: Sonar | Check if project "{{ sonar_project_key }}" already exists
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/projects/search?projects={{ sonar_project_key }}"
+        method: GET
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: [200]
+        validate_certs: false
+      register: sonar_search
+
+    - name: Sonar | Create project "{{ sonar_project_name }}"
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/projects/create"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          name: "{{ sonar_project_name }}"
+          project: "{{ sonar_project_key }}"
+          visibility: "{{ sonar_project_visibility }}"
+        status_code: [200]
+        validate_certs: false
+      when: (sonar_search.json.components | length) == 0
+
+    - name: Sonar | Revoke previous project token (if any)
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/user_tokens/revoke"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          login: "{{ sonar_admin_username }}"
+          name: "{{ sonar_project_token_name }}"
+        status_code: [200, 204, 400, 404]
+        validate_certs: false
+
+    - name: Sonar | Generate project analysis token
+      ansible.builtin.uri:
+        url: "https://{{ sonar_host }}/api/user_tokens/generate"
+        method: POST
+        user: "{{ sonar_admin_username }}"
+        password: "{{ sonar_admin_password }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          name: "{{ sonar_project_token_name }}"
+          type: "PROJECT_ANALYSIS_TOKEN"
+          projectKey: "{{ sonar_project_key }}"
+        status_code: [200]
+        validate_certs: false
+      register: sonar_project_token_resp
+      no_log: true
+
+    - name: Sonar | Set fact with project token
+      ansible.builtin.set_fact:
+        sonar_project_token: "{{ sonar_project_token_resp.json.token }}"
+      no_log: true
+
+    - name: Sonar | Fail if project token was not returned
+      ansible.builtin.fail:
+        msg: "SonarQube did not return a project analysis token."
+      when: (sonar_project_token | default('') | length) == 0
+
+    - name: Sonar | Store project token in Vault (secret/sonarqube/projects/{{ sonar_project_key }})
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/sonarqube/projects/{{ sonar_project_key }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          url: "https://{{ sonar_host }}"
+          project_key: "{{ sonar_project_key }}"
+          project_name: "{{ sonar_project_name }}"
+          token_name: "{{ sonar_project_token_name }}"
+          token: "{{ sonar_project_token }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
 
     #Create Bank CI/CD
     - name: Jenkins | Set fact (Bank CI/CD)

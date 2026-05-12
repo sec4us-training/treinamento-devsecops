@@ -96,13 +96,28 @@ else
     systemctl enable ssh
     systemctl start ssh
 
-    echo -e "\n${OK} Instalando/atualizando versão do ansible core"
-    $PYTHON3 -m pip install $PIP_FLAGS -U ansible 'ansible-core>=2.17.0' 'jinja2>=3.1.6' hvac
+    echo -e "\n${OK} Atualizando pip"
+    $PYTHON3 -m pip install $PIP_FLAGS --upgrade pip
+    if [ "$?" != "0" ]; then
+        echo -e "${ERROR} ${O} Erro atualizando pip${W}\n"
+        info
+        exit 1
+    fi
+
+    echo -e "\n${OK} Instalando/atualizando Ansible (meta-pacote + transitivas)"
+    # - Sem fixar ansible-core: o meta-pacote 'ansible' ja pina a versao certa.
+    # - --upgrade-strategy eager: atualiza tambem deps transitivas (cryptography, paramiko, jinja2 etc.).
+    # - Teto pratico: ansible-core >=2.18 exige Python>=3.11, >=2.19 exige >=3.12, >=2.20 exige >=3.13.
+    $PYTHON3 -m pip install $PIP_FLAGS \
+        --upgrade --upgrade-strategy eager \
+        ansible 'jinja2>=3.1.6' hvac
     if [ "$?" != "0" ]; then
         echo -e "${ERROR} ${O} Erro atualizando Ansible${W}\n"
         info
         exit 1
     fi
+
+    echo -e "${OK} $(ansible --version 2>/dev/null | head -1 || echo 'ansible nao encontrado no PATH')"
 
     echo "startup_script" >> "$status_file"
     echo -e "${OK} ${G}OK${W}"
@@ -285,21 +300,22 @@ fix_password_auth() {
 
 # Cada entrada: "marker|playbook|label|pre_hook(opcional)"
 DEPLOY_STEPS=(
-    "step1_base|setup_base.yml|setup base|fix_password_auth"
-    "step2_tools|setup_tools.yml|tools"
-    "step3_docker|setup_docker.yml|Docker"
-    "step4_vault|install_vault.yml|Vault"
-    "step5_gitlab|install_gitlab.yml|Gitlab"
-    "step6_jfrog|install_jfrog.yml|Artifactory"
-    "step7_sonar|install_sonar.yml|Sonarqube"
-    "step8_web01|install_web01.yml|Web01"
-    "step9_jenkins|install_jenkins.yml|Jenkins"
-    "gitlab_helvio|gitlab_helvio.yml|gitlab_helvio"
-    "gitlab_bank|gitlab_bank.yml|gitlab_bank"
-    "gitlab_sonar_helper|gitlab_sonar_helper.yml|gitlab_sonar_helper"
-    "gitlab_webapi|gitlab_webapi.yml|gitlab_webapi"
-    "gitlab_devsecops|gitlab_devsecops.yml|gitlab_devsecops"
-    "gitlab_runner|gitlab_runner.yml|gitlab_runner"
+    "setup_base|setup_base.yml|setup base|Setup base do sistema"
+    "setup_tools|setup_tools.yml|Setup de ferramentas Linux"
+    "setup_docker|setup_docker.yml|Setup do Docker"
+    "install_vault|install_vault.yml|Instalar HashiCorp Vault"
+    "install_gitlab|install_gitlab.yml|Instalar GitLab"
+    "install_jfrog|install_jfrog.yml|Instalar JFrog Artifactory"
+    "install_sonar|install_sonar.yml|Instalar SonarQube"
+    "install_jenkins|install_jenkins.yml|Instalar Jenkins"
+    "install_jenkins_sonar|install_jenkins_sonar.yml|Jenkins-Sonar integration"
+    "install_web01|install_web01.yml|Instalar Web01"
+    "gitlab_helvio|gitlab_helvio.yml|Criar repositório GitLab (Helvio)"
+    "gitlab_bank|gitlab_bank.yml|Criar repositório GitLab (Bank)"
+    "gitlab_sonar_helper|gitlab_sonar_helper.yml|Criar repositório GitLab (Sonar Helper)"
+    "gitlab_webapi|gitlab_webapi.yml|Criar repositório GitLab (WebAPI)"
+    "gitlab_devsecops|gitlab_devsecops.yml|Criar repositório GitLab (DevSecOps)"
+    "gitlab_runner|gitlab_runner.yml|Configurar GitLab Runner"
 )
 
 for entry in "${DEPLOY_STEPS[@]}"; do
