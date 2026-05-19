@@ -309,6 +309,7 @@ DEPLOY_STEPS=(
     "install_jfrog|install_jfrog.yml|Instalar JFrog Artifactory"
     "install_sonar|install_sonar.yml|Instalar SonarQube"
     "install_jenkins|install_jenkins.yml|Instalar Jenkins"
+    "install_jenkins_runner|install_jenkins_runner.yml|Instalar Jenkins Runner"
     "install_jenkins_sonar|install_jenkins_sonar.yml|Jenkins-Sonar integration"
     "install_web01|install_web01.yml|Instalar Web01"
     

@@ -1,0 +1,354 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+    runner_name: "JenkinsRunner"
+    runner_description: "Jenkins Linux runner (inbound JNLP / Docker)"
+    runner_labels: "linux docker dind"
+    runner_executors: 4
+    runner_home: "/u01/jenkins_runner"
+    runner_remote_fs: "/home/jenkins"
+    runner_jenkins_url: "https://{{ jenkins_host }}/"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+    - include_tasks: 'vault_token_jenkins.yml'
+
+    - name: Jenkins | Get crumb (CSRF token)
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        return_content: yes
+        status_code: 200
+      register: crumb_json
+      retries: 30
+      delay: 5
+      until: crumb_json.status == 200
+
+    - name: Jenkins | Build CSRF header
+      ansible.builtin.set_fact:
+        jenkins_crumb_header: >-
+          {{
+            {
+              crumb_json.json.crumbRequestField:
+              crumb_json.json.crumb
+            }
+          }}
+
+    # ------------------------------------------------------------------
+    # Jenkins | Create (or replace) inbound JNLP agent and capture secret
+    #          + force built-in node to EXCLUSIVE (label-only) mode
+    # ------------------------------------------------------------------
+    - name: Jenkins | Create JNLP agent "{{ runner_name }}" and capture secret
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/scriptText"
+        method: POST
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body_format: form-urlencoded
+        body:
+          script: |
+            import jenkins.model.Jenkins
+            import hudson.model.Node
+            import hudson.slaves.DumbSlave
+            import hudson.slaves.JNLPLauncher
+            import hudson.slaves.RetentionStrategy
+
+            def jenkins = Jenkins.instance
+
+            // Built-in node: "Only build jobs with label expressions matching this node"
+            jenkins.setMode(Node.Mode.EXCLUSIVE)
+            jenkins.save()
+
+            def name = "{{ runner_name }}"
+            def existing = jenkins.getNode(name)
+            if (existing != null) {
+                jenkins.removeNode(existing)
+            }
+
+            JNLPLauncher launcher = new JNLPLauncher(true)
+            try {
+                launcher.setWebSocket(true)
+            } catch (Throwable t) {
+                // older Jenkins versions without setWebSocket
+            }
+
+            // New runner: "Use this node as much as possible"
+            DumbSlave node = new DumbSlave(name, "{{ runner_remote_fs }}", launcher)
+            node.setNodeDescription("{{ runner_description }}")
+            node.setNumExecutors({{ runner_executors }})
+            node.setMode(Node.Mode.NORMAL)
+            node.setLabelString("{{ runner_labels }}")
+            node.setRetentionStrategy(new RetentionStrategy.Always())
+
+            jenkins.addNode(node)
+
+            def computer = jenkins.getComputer(name)
+            print computer.getJnlpMac()
+        return_content: true
+        status_code: 200
+        validate_certs: false
+      register: jenkins_agent_create
+      no_log: true
+
+    - name: Jenkins | Set runner secret fact
+      ansible.builtin.set_fact:
+        jenkins_runner_secret: "{{ jenkins_agent_create.content | trim }}"
+      no_log: true
+
+    - name: Jenkins | Validate runner secret format
+      ansible.builtin.assert:
+        that:
+          - jenkins_runner_secret | length >= 32
+          - jenkins_runner_secret is match('^[a-f0-9]+$')
+        fail_msg: "Failed to obtain a valid JNLP secret from Jenkins"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # Jenkins Runner | Build and run the inbound agent container
+    # ------------------------------------------------------------------
+    - name: Jenkins Runner | Stop service, if exists
+      shell: |
+        cd {{ runner_home }}
+        docker compose down -v
+      ignore_errors: true
+
+    - name: Jenkins Runner | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+        - { path: "{{ runner_home }}/ssh_keys" }
+        - { path: "{{ runner_home }}" }
+
+    - name: Jenkins Runner | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+        - { path: "{{ runner_home }}" }
+        - { path: "{{ runner_home }}/ssh_keys" }
+
+    - name: Jenkins Runner | Find root SSH keys
+      ansible.builtin.find:
+        paths: /root/.ssh
+        patterns: 'id_rsa*'
+      register: jenkins_runner_root_ssh_keys
+
+    - name: Jenkins Runner | Copy SSH keys
+      copy:
+        src: "{{ item.path }}"
+        remote_src: true
+        dest: "{{ runner_home }}/ssh_keys/"
+        owner: "root"
+        group: "root"
+      loop: "{{ jenkins_runner_root_ssh_keys.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Jenkins Runner | Copy CA root cert
+      copy:
+        src: "/etc/nginx/certs/root-ca.pem"
+        dest: "{{ runner_home }}/root-ca.crt"
+        remote_src: true
+        owner: "root"
+        group: "root"
+
+    - name: Jenkins Runner | Creating Dockerfile
+      copy:
+        dest: "{{ runner_home }}/Dockerfile"
+        content: |
+          {% raw %}FROM ubuntu:24.04
+
+          ARG DEBIAN_FRONTEND=noninteractive
+
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+                  ca-certificates \
+                  curl \
+                  wget \
+                  git \
+                  openssh-client \
+                  openjdk-21-jre-headless \
+                  bash \
+                  sudo \
+                  tzdata \
+                  jq \
+              && rm -rf /var/lib/apt/lists/*
+
+          ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+          ENV PATH="$JAVA_HOME/bin:${PATH}"
+
+          COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
+          RUN update-ca-certificates
+
+          RUN keytool -importcert -noprompt \
+            -alias root-ca \
+            -file /usr/local/share/ca-certificates/root-ca.crt \
+            -keystore "$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit
+
+          RUN useradd -m -d /home/jenkins -s /bin/bash jenkins \
+              && echo "jenkins ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+          RUN mkdir -p /home/jenkins/.ssh
+          COPY --chown=jenkins:jenkins ssh_keys/id_rsa* /home/jenkins/.ssh/
+          RUN chmod 700 /home/jenkins/.ssh \
+              && chmod 600 /home/jenkins/.ssh/id_rsa* \
+              && chown -R jenkins:jenkins /home/jenkins/.ssh
+
+          RUN apt update && \
+              apt install -y \
+              ca-certificates \
+              gnupg \
+              wget \
+              curl \
+              rsync \
+              jq \
+              zip \
+              sqlite3 \
+              python3 \
+              python3-pip \
+              python3-venv && \
+              apt-get clean && \
+              rm -rf /var/lib/apt/lists/*
+
+          # Install JFrog CLI (system + jenkins tools path)
+          RUN curl -fL https://install-cli.jfrog.io | sh && \
+              chmod +x /usr/local/bin/jf && \
+              jf --version && \
+              mkdir -p /home/jenkins/tools/io.jenkins.plugins.jfrog.JfrogInstallation/jfrog-cli && \
+              cp /usr/local/bin/jf /home/jenkins/tools/io.jenkins.plugins.jfrog.JfrogInstallation/jfrog-cli/jf && \
+              chmod +x /home/jenkins/tools/io.jenkins.plugins.jfrog.JfrogInstallation/jfrog-cli/jf && \
+              chown -R jenkins:jenkins /home/jenkins/tools
+
+          # Install gitleaks (latest release from GitHub)
+          RUN GITLEAKS_VERSION=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name | sed 's/^v//') && \
+              curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz && \
+              tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks && \
+              mv /tmp/gitleaks /usr/local/bin/gitleaks && \
+              chmod +x /usr/local/bin/gitleaks && \
+              rm -f /tmp/gitleaks.tar.gz && \
+              gitleaks version
+
+          USER jenkins
+          WORKDIR /home/jenkins
+
+          COPY --chown=jenkins:jenkins entrypoint.sh /home/jenkins/entrypoint.sh
+          RUN sudo chmod +x /home/jenkins/entrypoint.sh
+
+          ENTRYPOINT ["/home/jenkins/entrypoint.sh"]
+          {% endraw %}
+
+    - name: Jenkins Runner | Creating entrypoint.sh
+      copy:
+        dest: "{{ runner_home }}/entrypoint.sh"
+        mode: '0755'
+        content: |
+          {% raw %}#!/bin/bash
+          set -e
+
+          : "${JENKINS_URL:?A variavel JENKINS_URL e obrigatoria}"
+          : "${JENKINS_SECRET:?A variavel JENKINS_SECRET e obrigatoria}"
+          : "${JENKINS_AGENT_NAME:?A variavel JENKINS_AGENT_NAME e obrigatoria}"
+          JENKINS_WORK_DIR="${JENKINS_WORK_DIR:-/home/jenkins}"
+
+          cd "${JENKINS_WORK_DIR}"
+
+          echo "[entrypoint] Baixando agent.jar de ${JENKINS_URL}jnlpJars/agent.jar"
+          curl -k -sSfO "${JENKINS_URL%/}/jnlpJars/agent.jar"
+
+          echo "[entrypoint] Conectando agente '${JENKINS_AGENT_NAME}' em ${JENKINS_URL}"
+          exec java -jar agent.jar \
+              -url "${JENKINS_URL}" \
+              -secret "${JENKINS_SECRET}" \
+              -name "${JENKINS_AGENT_NAME}" \
+              -webSocket \
+              -disableHttpsCertValidation \
+              -workDir "${JENKINS_WORK_DIR}"
+          {% endraw %}
+
+    - name: Jenkins Runner | Build docker image
+      shell: |
+        cd {{ runner_home }}
+        docker build -t registry.labs.sec4us.com.br/ci/jenkins_runner:lts .
+
+    - name: Jenkins Runner | Registry docker image
+      shell: |
+        cd {{ runner_home }}
+        docker push registry.labs.sec4us.com.br/ci/jenkins_runner:lts
+
+    - name: Jenkins Runner | Creating docker-compose.yml
+      copy:
+        dest: "{{ runner_home }}/docker-compose.yml"
+        content: |
+          services:
+            jenkins-agent:
+              image: registry.labs.sec4us.com.br/ci/jenkins_runner:lts
+              container_name: jenkins-runner
+              restart: unless-stopped
+
+              extra_hosts:
+                - "{{vault_host}}:host-gateway"
+                - "{{gitlab_host}}:host-gateway"
+                - "{{artifactory_host}}:host-gateway"
+                - "{{jenkins_host}}:host-gateway"
+                - "{{sonar_host}}:host-gateway"
+                - "{{web01_host}}:host-gateway"
+                - "{{registry_host}}:host-gateway"
+
+              environment:
+                JENKINS_URL: "{{ runner_jenkins_url }}"
+                JENKINS_SECRET: "{{ jenkins_runner_secret }}"
+                JENKINS_AGENT_NAME: "{{ runner_name }}"
+                JENKINS_WORK_DIR: "{{ runner_remote_fs }}"
+                TZ: "America/Sao_Paulo"
+
+              volumes:
+                - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
+                - jenkins_workdir:{{ runner_remote_fs }}
+
+          volumes:
+            jenkins_workdir:
+
+    - name: Jenkins Runner | Start service
+      shell: |
+        cd {{ runner_home }}
+        docker compose up -d
+
+    - name: Jenkins Runner | Wait for runner container to be running
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' jenkins-runner
+      register: runner_running
+      retries: 60
+      delay: 10
+      until: runner_running.stdout == "true"
+      changed_when: false
+
+    - name: Jenkins Runner | Wait for agent to be online
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/computer/{{ runner_name }}/api/json?tree=offline,temporarilyOffline"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        return_content: yes
+        status_code: 200
+      register: agent_status
+      until: agent_status.json.offline == false
+      retries: 60
+      delay: 10
