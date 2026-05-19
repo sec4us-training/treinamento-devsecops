@@ -310,6 +310,7 @@ DEPLOY_STEPS=(
     "install_sonar|install_sonar.yml|Instalar SonarQube"
     "install_jenkins|install_jenkins.yml|Instalar Jenkins"
     "install_jenkins_runner|install_jenkins_runner.yml|Instalar Jenkins Runner"
+    "prepare_azure_devops|prepare_azure_devops.yml|Preparar Azure DevOps Runner"
     "install_jenkins_sonar|install_jenkins_sonar.yml|Jenkins-Sonar integration"
     "install_web01|install_web01.yml|Instalar Web01"
     

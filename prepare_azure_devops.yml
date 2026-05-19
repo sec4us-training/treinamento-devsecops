@@ -1,0 +1,620 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+    azure_runner_home: "/u01/azure_runner"
+    azure_runner_image: "registry.labs.sec4us.com.br/ci/azure_devops_runner:lts"
+    azure_runner_work_dir: "_work"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+
+    # ------------------------------------------------------------------
+    # Azure DevOps Runner | Reset working directory
+    # ------------------------------------------------------------------
+    - name: Azure Runner | Stop service, if exists
+      shell: |
+        cd {{ azure_runner_home }}
+        docker compose down -v
+      ignore_errors: true
+
+    - name: Azure Runner | Remove directories
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+        - { path: "{{ azure_runner_home }}/ssh_keys" }
+        - { path: "{{ azure_runner_home }}" }
+
+    - name: Azure Runner | Create directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "root"
+        group: "root"
+        mode: 0777
+      with_items:
+        - { path: "{{ azure_runner_home }}" }
+        - { path: "{{ azure_runner_home }}/ssh_keys" }
+
+    - name: Azure Runner | Find root SSH keys
+      ansible.builtin.find:
+        paths: /root/.ssh
+        patterns: 'id_rsa*'
+      register: azure_runner_root_ssh_keys
+
+    - name: Azure Runner | Copy SSH keys
+      copy:
+        src: "{{ item.path }}"
+        remote_src: true
+        dest: "{{ azure_runner_home }}/ssh_keys/"
+        owner: "root"
+        group: "root"
+      loop: "{{ azure_runner_root_ssh_keys.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Azure Runner | Copy CA root cert
+      copy:
+        src: "/etc/nginx/certs/root-ca.pem"
+        dest: "{{ azure_runner_home }}/root-ca.crt"
+        remote_src: true
+        owner: "root"
+        group: "root"
+
+    # ------------------------------------------------------------------
+    # Azure DevOps Runner | Dockerfile (same toolchain pattern as the
+    # Jenkins runner; agent runs as user `agent`)
+    # ------------------------------------------------------------------
+    - name: Azure Runner | Creating Dockerfile
+      copy:
+        dest: "{{ azure_runner_home }}/Dockerfile"
+        content: |
+          {% raw %}FROM ubuntu:24.04
+
+          ARG DEBIAN_FRONTEND=noninteractive
+
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+                  ca-certificates \
+                  curl \
+                  wget \
+                  git \
+                  openssh-client \
+                  openjdk-21-jre-headless \
+                  bash \
+                  sudo \
+                  tzdata \
+                  jq \
+                  libicu74 \
+                  liblttng-ust1 \
+              && rm -rf /var/lib/apt/lists/*
+
+          ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+          ENV PATH="$JAVA_HOME/bin:${PATH}"
+
+          COPY root-ca.crt /usr/local/share/ca-certificates/root-ca.crt
+          RUN update-ca-certificates
+
+          RUN keytool -importcert -noprompt \
+            -alias root-ca \
+            -file /usr/local/share/ca-certificates/root-ca.crt \
+            -keystore "$JAVA_HOME/lib/security/cacerts" \
+            -storepass changeit
+
+          RUN useradd -m -d /home/agent -s /bin/bash agent \
+              && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+          RUN mkdir -p /home/agent/.ssh
+          COPY --chown=agent:agent ssh_keys/id_rsa* /home/agent/.ssh/
+          RUN chmod 700 /home/agent/.ssh \
+              && chmod 600 /home/agent/.ssh/id_rsa* \
+              && chown -R agent:agent /home/agent/.ssh
+
+          RUN apt update && \
+              apt install -y \
+              ca-certificates \
+              gnupg \
+              wget \
+              curl \
+              rsync \
+              jq \
+              zip \
+              sqlite3 \
+              python3 \
+              python3-pip \
+              python3-venv && \
+              apt-get clean && \
+              rm -rf /var/lib/apt/lists/*
+
+          # Install JFrog CLI
+          RUN curl -fL https://install-cli.jfrog.io | sh && \
+              chmod +x /usr/local/bin/jf && \
+              jf --version
+
+          # Install gitleaks (latest release from GitHub)
+          RUN GITLEAKS_VERSION=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | jq -r .tag_name | sed 's/^v//') && \
+              curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz && \
+              tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks && \
+              mv /tmp/gitleaks /usr/local/bin/gitleaks && \
+              chmod +x /usr/local/bin/gitleaks && \
+              rm -f /tmp/gitleaks.tar.gz && \
+              gitleaks version
+
+          # Install Azure DevOps Pipelines self-hosted agent.
+          # The download host has changed historically (vstsagentpackage.azureedge.net
+          # is being retired in favor of download.agent.dev.azure.com), so resolve
+          # the actual URL from the release's assets.json instead of hardcoding it.
+          RUN AZP_AGENT_TAG=$(curl -fsSL https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest | jq -r '.tag_name') && \
+              AZP_AGENT_URL=$(curl -fsSL "https://github.com/microsoft/azure-pipelines-agent/releases/download/${AZP_AGENT_TAG}/assets.json" \
+                  | jq -r '.[] | select(.platform=="linux-x64") | select(.name | startswith("vsts-agent-linux-x64-")) | .downloadUrl' \
+                  | head -n1) && \
+              if [ -z "$AZP_AGENT_URL" ]; then echo "Falha resolvendo URL do agent" >&2; exit 1; fi && \
+              echo "Baixando agent: ${AZP_AGENT_URL}" && \
+              mkdir -p /azp/agent && \
+              curl -fsSL "${AZP_AGENT_URL}" -o /tmp/agent.tar.gz && \
+              tar -xzf /tmp/agent.tar.gz -C /azp/agent && \
+              rm -f /tmp/agent.tar.gz && \
+              /azp/agent/bin/installdependencies.sh && \
+              chown -R agent:agent /azp
+
+          ENV AGENT_ALLOW_RUNASROOT="1"
+
+          COPY entrypoint.sh /azp/entrypoint.sh
+          RUN chmod +x /azp/entrypoint.sh && chown agent:agent /azp/entrypoint.sh
+
+          USER agent
+          WORKDIR /azp/agent
+
+          ENTRYPOINT ["/azp/entrypoint.sh"]
+          {% endraw %}
+
+    - name: Azure Runner | Creating entrypoint.sh
+      copy:
+        dest: "{{ azure_runner_home }}/entrypoint.sh"
+        mode: '0755'
+        content: |
+          {% raw %}#!/bin/bash
+          set -e
+
+          : "${AZP_URL:?A variavel AZP_URL e obrigatoria}"
+          : "${AZP_TOKEN:?A variavel AZP_TOKEN e obrigatoria}"
+          : "${AZP_POOL:?A variavel AZP_POOL e obrigatoria}"
+
+          AZP_AGENT_NAME="${AZP_AGENT_NAME:-$(hostname)}"
+          AZP_WORK="${AZP_WORK:-_work}"
+
+          cd /azp/agent
+
+          cleanup() {
+              if [ -e .agent ]; then
+                  echo "[entrypoint] Removendo agent do pool..."
+                  ./config.sh remove --unattended \
+                      --auth PAT \
+                      --token "$AZP_TOKEN" || true
+              fi
+          }
+
+          trap 'cleanup; exit 0'   EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
+
+          echo "[entrypoint] Configurando agent '${AZP_AGENT_NAME}' no pool '${AZP_POOL}' em ${AZP_URL}"
+          ./config.sh --unattended \
+              --agent "${AZP_AGENT_NAME}" \
+              --url "${AZP_URL}" \
+              --auth PAT \
+              --token "${AZP_TOKEN}" \
+              --pool "${AZP_POOL}" \
+              --work "${AZP_WORK}" \
+              --replace \
+              --acceptTeeEula
+
+          echo "[entrypoint] Iniciando agent..."
+          exec ./run.sh
+          {% endraw %}
+
+    - name: Azure Runner | Creating docker-compose.yml
+      copy:
+        dest: "{{ azure_runner_home }}/docker-compose.yml"
+        content: |
+          services:
+            azure-agent:
+              image: {{ azure_runner_image }}
+              container_name: azure-devops-runner
+              restart: unless-stopped
+              env_file:
+                - .env
+
+              extra_hosts:
+                - "{{vault_host}}:host-gateway"
+                - "{{gitlab_host}}:host-gateway"
+                - "{{artifactory_host}}:host-gateway"
+                - "{{jenkins_host}}:host-gateway"
+                - "{{sonar_host}}:host-gateway"
+                - "{{web01_host}}:host-gateway"
+                - "{{registry_host}}:host-gateway"
+
+              environment:
+                TZ: "America/Sao_Paulo"
+
+              volumes:
+                - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
+                - azure_agent_work:/azp/agent/_work
+
+          volumes:
+            azure_agent_work:
+
+    - name: Azure Runner | Creating .env template
+      copy:
+        dest: "{{ azure_runner_home }}/.env"
+        mode: '0600'
+        content: |
+          # Preenchido automaticamente por setup_azure_devops.py
+          # AZP_URL=https://dev.azure.com/<organization>
+          # AZP_TOKEN=<personal access token>
+          # AZP_POOL=Default
+          # AZP_AGENT_NAME=sec4us-linux-runner
+          # AZP_WORK=_work
+
+    - name: Azure Runner | Creating setup_azure_devops.py
+      copy:
+        dest: "{{ azure_runner_home }}/setup_azure_devops.py"
+        mode: '0755'
+        content: |
+          {% raw %}#!/usr/bin/env python3
+          """
+          Configura um Azure DevOps self-hosted agent para o ambiente de
+          treinamento Sec4US.
+
+          Solicita do usuario:
+            - URL da Organization (ex: https://dev.azure.com/sec4us)
+            - Personal Access Token (PAT) ja criado com as devidas permissoes
+            - Nome do Agent Pool
+            - Nome do Agent
+
+          Antes de gravar qualquer credencial o script valida que o PAT possui
+          permissoes para administrar Agent Pools (escopo
+          'Agent Pools (read, manage)'), criando o pool se necessario.
+
+          Em seguida gera o /u01/azure_runner/.env, sobe o container via
+          'docker compose up -d' e marca o agent registrado com as capabilities
+          (tags) 'sec4us', 'treinamento' e 'linux'.
+
+          Uso:
+              sudo python3 /u01/azure_runner/setup_azure_devops.py
+          """
+
+          from __future__ import annotations
+
+          import base64
+          import getpass
+          import json
+          import os
+          import subprocess
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          RUNNER_HOME = Path("/u01/azure_runner")
+          ENV_FILE = RUNNER_HOME / ".env"
+
+          AGENT_TAGS = ("sec4us", "treinamento", "linux")
+          API_VERSION = "7.1-preview.1"
+
+          REGISTRATION_TIMEOUT_SECONDS = 600
+          REGISTRATION_POLL_INTERVAL = 5
+
+
+          def msg(text: str) -> None:
+              print(text, flush=True)
+
+
+          def fail(text: str, code: int = 1) -> "None":
+              print(f"[!] {text}", file=sys.stderr, flush=True)
+              sys.exit(code)
+
+
+          def ask(prompt: str, default: str | None = None, secret: bool = False) -> str:
+              suffix = f" [{default}]" if default else ""
+              while True:
+                  if secret:
+                      value = getpass.getpass(f"{prompt}{suffix}: ")
+                  else:
+                      value = input(f"{prompt}{suffix}: ").strip()
+                  if value:
+                      return value
+                  if default is not None:
+                      return default
+                  msg("    Valor obrigatorio, tente novamente.")
+
+
+          def azdo_headers(pat: str) -> dict:
+              token = base64.b64encode(f":{pat}".encode("utf-8")).decode("ascii")
+              return {
+                  "Authorization": f"Basic {token}",
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              }
+
+
+          def azdo_request(
+              url: str,
+              pat: str,
+              method: str = "GET",
+              payload: dict | None = None,
+          ) -> tuple[int, dict]:
+              data = None
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  headers=azdo_headers(pat),
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      body = resp.read().decode("utf-8") or "{}"
+                      status = resp.getcode()
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  status = exc.code
+              except urllib.error.URLError as exc:
+                  fail(f"Falha de rede acessando {url}: {exc.reason}")
+
+              parsed: dict
+              try:
+                  parsed = json.loads(body) if body else {}
+              except json.JSONDecodeError:
+                  parsed = {"_raw": body}
+              return status, parsed
+
+
+          def check_root() -> None:
+              if os.geteuid() != 0:
+                  fail("Execute este script como root (sudo).")
+
+
+          def normalize_org_url(url: str) -> str:
+              url = url.strip().rstrip("/")
+              if not url.startswith(("http://", "https://")):
+                  url = "https://" + url
+              return url
+
+
+          def ensure_pat_permissions(org_url: str, pat: str) -> None:
+              """
+              Valida que o PAT tem acesso a Azure DevOps e permissao para
+              administrar Agent Pools.
+
+              Estrategia:
+                1. GET /_apis/connectionData  -> autentica o PAT
+                2. GET /_apis/distributedtask/pools -> precisa de
+                   'Agent Pools (read)' no minimo
+                3. Tenta uma chamada de gerencia 'safe' (POST sem efeito real,
+                   payload invalido) -> 401/403 indica falta de permissao;
+                   400 indica que o PAT pode invocar a rota.
+              """
+              msg("[+] Validando PAT...")
+
+              status, _ = azdo_request(
+                  f"{org_url}/_apis/connectionData?api-version={API_VERSION}",
+                  pat,
+              )
+              if status == 401:
+                  fail("PAT invalido ou sem acesso a esta Organization.")
+              if status == 404:
+                  fail(
+                      "Organization nao encontrada. Confirme a URL "
+                      "(ex: https://dev.azure.com/<org>)."
+                  )
+              if status >= 400:
+                  fail(f"Falha autenticando no Azure DevOps (HTTP {status}).")
+
+              msg("    - Autenticacao OK")
+
+              status, _ = azdo_request(
+                  f"{org_url}/_apis/distributedtask/pools?api-version={API_VERSION}",
+                  pat,
+              )
+              if status in (401, 403):
+                  fail(
+                      "PAT sem escopo 'Agent Pools (read)'. Recrie o token "
+                      "incluindo a permissao 'Agent Pools (read, manage)'."
+                  )
+              if status >= 400:
+                  fail(
+                      f"Erro consultando Agent Pools (HTTP {status}). "
+                      "Verifique a Organization e o PAT."
+                  )
+
+              msg("    - Permissao 'Agent Pools (read)' OK")
+
+              # Tentativa controlada de invocar a rota de gerencia. Enviamos um
+              # payload propositalmente invalido para nao alterar nada; um 400
+              # indica que conseguimos passar pela autorizacao. 401/403 indica
+              # falta do escopo 'manage'.
+              status, body = azdo_request(
+                  f"{org_url}/_apis/distributedtask/pools?api-version={API_VERSION}",
+                  pat,
+                  method="POST",
+                  payload={},
+              )
+              if status in (401, 403):
+                  fail(
+                      "PAT sem escopo 'Agent Pools (manage)'. Recrie o token "
+                      "incluindo a permissao 'Agent Pools (read, manage)'."
+                  )
+              if status not in (200, 201, 400):
+                  msg(
+                      f"    [?] Resposta inesperada testando 'manage' (HTTP {status}). "
+                      "Prosseguindo, mas a criacao de pool pode falhar."
+                  )
+              else:
+                  msg("    - Permissao 'Agent Pools (manage)' OK")
+
+
+          def find_or_create_pool(org_url: str, pat: str, pool_name: str) -> dict:
+              msg(f"[+] Procurando pool '{pool_name}'...")
+              encoded = urllib.parse.quote(pool_name)
+              status, data = azdo_request(
+                  f"{org_url}/_apis/distributedtask/pools"
+                  f"?poolName={encoded}&api-version={API_VERSION}",
+                  pat,
+              )
+              if status >= 400:
+                  fail(f"Erro consultando pool (HTTP {status}).")
+
+              pools = data.get("value", [])
+              if pools:
+                  pool = pools[0]
+                  msg(f"    - Pool existente encontrado (id={pool['id']})")
+                  return pool
+
+              msg("    - Pool nao existe, criando...")
+              status, pool = azdo_request(
+                  f"{org_url}/_apis/distributedtask/pools?api-version={API_VERSION}",
+                  pat,
+                  method="POST",
+                  payload={"name": pool_name, "autoProvision": True},
+              )
+              if status >= 400 or "id" not in pool:
+                  fail(f"Falha criando pool '{pool_name}' (HTTP {status}): {pool}")
+              msg(f"    - Pool criado (id={pool['id']})")
+              return pool
+
+
+          def write_env_file(values: dict) -> None:
+              msg(f"[+] Gravando credenciais em {ENV_FILE}")
+              lines = [f"{k}={v}" for k, v in values.items()]
+              ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+              os.chmod(ENV_FILE, 0o600)
+
+
+          def docker_compose_up() -> None:
+              msg("[+] Executando 'docker compose up -d'")
+              try:
+                  subprocess.run(
+                      ["docker", "compose", "up", "-d"],
+                      cwd=str(RUNNER_HOME),
+                      check=True,
+                  )
+              except FileNotFoundError:
+                  fail("Comando 'docker' nao encontrado no PATH.")
+              except subprocess.CalledProcessError as exc:
+                  fail(f"'docker compose up -d' retornou codigo {exc.returncode}.")
+
+
+          def wait_for_agent(org_url: str, pat: str, pool_id: int, agent_name: str) -> int:
+              msg(
+                  f"[+] Aguardando o agent '{agent_name}' registrar no pool "
+                  f"(timeout: {REGISTRATION_TIMEOUT_SECONDS}s)..."
+              )
+              deadline = time.time() + REGISTRATION_TIMEOUT_SECONDS
+              while time.time() < deadline:
+                  status, data = azdo_request(
+                      f"{org_url}/_apis/distributedtask/pools/{pool_id}/agents"
+                      f"?api-version={API_VERSION}",
+                      pat,
+                  )
+                  if status < 400:
+                      for agent in data.get("value", []):
+                          if agent.get("name") == agent_name:
+                              msg(f"    - Agent registrado (id={agent['id']})")
+                              return agent["id"]
+                  time.sleep(REGISTRATION_POLL_INTERVAL)
+              fail(
+                  "Tempo esgotado esperando o agent aparecer no Azure DevOps. "
+                  "Verifique os logs do container: docker logs azure-devops-runner"
+              )
+
+
+          def apply_tags(org_url: str, pat: str, pool_id: int, agent_id: int) -> None:
+              msg(f"[+] Aplicando tags {AGENT_TAGS} ao agent...")
+              capabilities = {tag: "true" for tag in AGENT_TAGS}
+              status, body = azdo_request(
+                  f"{org_url}/_apis/distributedtask/pools/{pool_id}/agents/"
+                  f"{agent_id}/usercapabilities?api-version={API_VERSION}",
+                  pat,
+                  method="PUT",
+                  payload=capabilities,
+              )
+              if status >= 400:
+                  fail(
+                      f"Falha aplicando user capabilities (HTTP {status}): {body}"
+                  )
+              msg("    - Tags aplicadas como user capabilities")
+
+
+          def main() -> None:
+              check_root()
+
+              msg("=== Azure DevOps Self-Hosted Agent - Setup ===\n")
+              msg(
+                  "Pre-requisito: voce ja deve ter criado um Personal Access Token\n"
+                  "(PAT) com o escopo 'Agent Pools (read, manage)'. O script ira\n"
+                  "verificar esta permissao antes de prosseguir.\n"
+              )
+
+              org_url = normalize_org_url(
+                  ask("URL da Azure DevOps Organization (ex: https://dev.azure.com/sec4us)")
+              )
+              pat = ask("Personal Access Token (PAT)", secret=True)
+              pool_name = ask("Nome do Agent Pool", default="Sec4US-Linux")
+              agent_name = ask("Nome do Agent", default="sec4us-linux-runner")
+
+              ensure_pat_permissions(org_url, pat)
+              pool = find_or_create_pool(org_url, pat, pool_name)
+
+              write_env_file({
+                  "AZP_URL": org_url,
+                  "AZP_TOKEN": pat,
+                  "AZP_POOL": pool_name,
+                  "AZP_AGENT_NAME": agent_name,
+                  "AZP_WORK": "_work",
+              })
+
+              docker_compose_up()
+
+              agent_id = wait_for_agent(org_url, pat, pool["id"], agent_name)
+              apply_tags(org_url, pat, pool["id"], agent_id)
+
+              msg("\n=== Setup concluido ===")
+              msg(f"  Organization : {org_url}")
+              msg(f"  Pool         : {pool_name} (id={pool['id']})")
+              msg(f"  Agent        : {agent_name}")
+              msg(f"  Tags         : {', '.join(AGENT_TAGS)}")
+              msg("\nLogs do container: docker logs -f azure-devops-runner")
+
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except KeyboardInterrupt:
+                  fail("Interrompido pelo usuario.", code=130)
+          {% endraw %}
+
+    # ------------------------------------------------------------------
+    # Azure DevOps Runner | Build and publish the image only.
+    # The container is intentionally NOT started here.
+    # 'docker compose up -d' is executed later by setup_azure_devops.py
+    # after the operator provides Azure DevOps credentials.
+    # ------------------------------------------------------------------
+    - name: Azure Runner | Build docker image
+      shell: |
+        cd {{ azure_runner_home }}
+        docker build -t {{ azure_runner_image }} .
+
+    - name: Azure Runner | Push docker image to local registry
+      shell: |
+        cd {{ azure_runner_home }}
+        docker push {{ azure_runner_image }}
