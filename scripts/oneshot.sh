@@ -100,8 +100,7 @@ run_play() {
         "$playbook"
 }
 
-run_play "fix_jenkins_nginx_websocket.yml" "Nginx WebSocket patch"
-run_play "install_jenkins_runner.yml"      "Jenkins runner install"
+run_play "prepare_azure_devops.yml"      "Azure runner install"
 
 echo
 info "All hosts processed successfully."
