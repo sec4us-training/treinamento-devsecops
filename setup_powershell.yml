@@ -1,0 +1,114 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    azps_version: "15.6.1"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - include_tasks: 'user_details.yml'
+
+    - name: PowerShell 7 | Update apt package lists
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: PowerShell 7 | Install prerequisite packages
+      ansible.builtin.apt:
+        pkg:
+          - wget
+          - apt-transport-https
+          - software-properties-common
+        state: present
+      register: powershell_prereqs_install
+      retries: 3
+      delay: 5
+      until: powershell_prereqs_install is succeeded
+
+    - name: PowerShell 7 | Gather Ubuntu release info
+      ansible.builtin.setup:
+        gather_subset:
+          - distribution
+
+    - name: PowerShell 7 | Resolve Ubuntu VERSION_ID
+      ansible.builtin.set_fact:
+        powershell_ubuntu_version: "{{ ansible_distribution_version }}"
+
+    - name: Az PowerShell | Show Ubuntu VERSION_ID
+      ansible.builtin.debug:
+        msg: "Ubuntu VERSION_ID: {{ powershell_ubuntu_version }}"
+
+    - name: PowerShell 7 | Download Microsoft repository package
+      ansible.builtin.get_url:
+        url: "https://packages.microsoft.com/config/ubuntu/{{ powershell_ubuntu_version }}/packages-microsoft-prod.deb"
+        dest: /tmp/packages-microsoft-prod.deb
+        mode: '0644'
+        force: yes
+
+    - name: PowerShell 7 | Register Microsoft repository keys
+      ansible.builtin.apt:
+        deb: /tmp/packages-microsoft-prod.deb
+
+    - name: PowerShell 7 | Remove downloaded Microsoft repository package
+      ansible.builtin.file:
+        path: /tmp/packages-microsoft-prod.deb
+        state: absent
+
+    - name: PowerShell 7 | Update apt package lists after adding Microsoft repo
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: PowerShell 7 | Install PowerShell
+      ansible.builtin.apt:
+        name: powershell
+        state: present
+      register: powershell_install
+      retries: 3
+      delay: 5
+      until: powershell_install is succeeded
+
+    - name: PowerShell 7 | Check installed version
+      ansible.builtin.command: pwsh --version
+      register: powershell_version
+      changed_when: false
+
+    - name: PowerShell 7 | Show installed version
+      ansible.builtin.debug:
+        msg: "{{ powershell_version.stdout }}"
+
+    - name: Az PowerShell | Trust PSGallery repository
+      ansible.builtin.command: >-
+        pwsh -NoProfile -NonInteractive -Command
+        "Set-PSRepository -Name PSGallery -InstallationPolicy Trusted"
+      changed_when: false
+
+    - name: Az PowerShell | Check if Az {{ azps_version }} is already installed
+      ansible.builtin.command: >-
+        pwsh -NoProfile -NonInteractive -Command
+        "if (Get-Module -ListAvailable -Name Az | Where-Object { $_.Version -eq '{{ azps_version }}' }) { 'present' } else { 'absent' }"
+      register: azps_check
+      changed_when: false
+
+    - name: Az PowerShell | Install module Az {{ azps_version }}
+      ansible.builtin.command: >-
+        pwsh -NoProfile -NonInteractive -Command
+        "Install-Module -Name Az -RequiredVersion {{ azps_version }} -Scope AllUsers -Repository PSGallery -Force -AllowClobber -Confirm:$false"
+      when: azps_check.stdout.strip() == 'absent'
+      register: azps_install
+      retries: 3
+      delay: 10
+      until: azps_install is succeeded
+      timeout: 3600
+
+    - name: Az PowerShell | Show installed Az version
+      ansible.builtin.command: >-
+        pwsh -NoProfile -NonInteractive -Command
+        "(Get-Module -ListAvailable -Name Az | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()"
+      register: azps_installed_version
+      changed_when: false
+
+    - name: Az PowerShell | Show installed Az version
+      ansible.builtin.debug:
+        msg: "Az PowerShell instalado: {{ azps_installed_version.stdout }}"

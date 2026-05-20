@@ -303,7 +303,8 @@ DEPLOY_STEPS=(
     "setup_base|setup_base.yml|setup base|Setup base do sistema"
     "setup_tools|setup_tools.yml|Setup de ferramentas Linux"
     "setup_docker|setup_docker.yml|Setup do Docker"
-    
+    "setup_powershell|setup_powershell.yml|Instalar PowerShell 7 e modulo Az"
+
     "install_vault|install_vault.yml|Instalar HashiCorp Vault"
     "install_gitlab|install_gitlab.yml|Instalar GitLab"
     "install_jfrog|install_jfrog.yml|Instalar JFrog Artifactory"
