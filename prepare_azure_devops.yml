@@ -215,6 +215,7 @@
               --acceptTeeEula
 
           echo "[entrypoint] Iniciando agent..."
+          sudo chown agent:agent -R "${AZP_WORK}"
           exec ./run.sh
           {% endraw %}
 
@@ -244,10 +245,8 @@
 
               volumes:
                 - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
-                - azure_agent_work:/azp/agent/_work
+                - ./azure_agent_work:/azp/agent/_work
 
-          volumes:
-            azure_agent_work:
 
     - name: Azure Runner | Creating .env template
       copy:
