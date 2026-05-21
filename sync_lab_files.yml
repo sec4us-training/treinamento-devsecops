@@ -1,0 +1,156 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+    additional_files_dest: "/u01/lab_files"
+    additional_files_owner: "root"
+    additional_files_group: "root"
+    additional_files_file_mode: "0644"
+    additional_files_dir_mode: "0755"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Lab Sync | Read ADITIONAL_FILES_PATH from controller env
+      ansible.builtin.set_fact:
+        additional_files_src: "{{ lookup('env', 'ADITIONAL_FILES_PATH') | default('', true) | trim }}"
+
+    - name: Lab Sync | Stat source directory on controller
+      ansible.builtin.stat:
+        path: "{{ additional_files_src }}"
+      delegate_to: localhost
+      become: false
+      register: additional_files_src_stat
+      when: additional_files_src | length > 0
+
+    - name: Lab Sync | Decide whether to sync
+      ansible.builtin.set_fact:
+        additional_files_should_sync: >-
+          {{
+            (additional_files_src | length > 0)
+            and (additional_files_src_stat.stat.exists | default(false))
+            and (additional_files_src_stat.stat.isdir | default(false))
+          }}
+
+    - name: Lab Sync | Skipping (ADITIONAL_FILES_PATH unset or invalid)
+      ansible.builtin.debug:
+        msg: >-
+          ADITIONAL_FILES_PATH='{{ additional_files_src }}' nao definido ou
+          diretorio inexistente no controller; sub-steps de sync pulados.
+      when: not additional_files_should_sync
+
+    - name: Lab Sync | Ensure destination directory exists
+      ansible.builtin.file:
+        path: "{{ additional_files_dest }}"
+        state: directory
+        owner: "{{ additional_files_owner }}"
+        group: "{{ additional_files_group }}"
+        mode: "{{ additional_files_dir_mode }}"
+      when: additional_files_should_sync
+
+    # Estratégia: 'git ls-files' aplica os .gitignore (todos, em qualquer
+    # profundidade) com as semantics oficiais do git, melhor que aproximação
+    # do rsync. A lista filtrada vai para um arquivo e o rsync consome via
+    # '--files-from=FILE' (sem espaço no argumento, não quebra no
+    # synchronize do Ansible). Se o source não for um git repo, fazemos um
+    # 'git init' transitório só para conseguir rodar o ls-files, e
+    # removemos o .git no final (no 'always', para limpar mesmo se falhar).
+    - name: Lab Sync | Check if source is a git repo
+      ansible.builtin.stat:
+        path: "{{ additional_files_src }}/.git"
+      delegate_to: localhost
+      become: false
+      register: additional_files_src_git
+      when: additional_files_should_sync
+
+    - name: Lab Sync | Decide whether we need a transient git init
+      ansible.builtin.set_fact:
+        additional_files_needs_git_init: >-
+          {{
+            additional_files_should_sync
+            and not (additional_files_src_git.stat.exists | default(false))
+          }}
+
+    - name: Lab Sync | Sync block (init+list+copy, sempre limpa no fim)
+      when: additional_files_should_sync
+      block:
+        - name: Lab Sync | Transient git init (source nao era git repo)
+          ansible.builtin.command:
+            cmd: git -C "{{ additional_files_src }}" init --quiet
+          delegate_to: localhost
+          become: false
+          changed_when: false
+          when: additional_files_needs_git_init
+
+        # 'git ls-files --cached' lista o que esta no index — arquivos
+        # commitados antes de serem adicionados ao .gitignore (ex: .DS_Store)
+        # continuam la, e --exclude-standard so filtra na parte --others.
+        # Solucao: pipe pelo 'check-ignore --no-index' que aplica os patterns
+        # do .gitignore mesmo a arquivos tracked, e o awk fica so com as
+        # linhas '::' (non-matching = NAO ignorados). Registramos o output
+        # para iterar via copy.
+        - name: Lab Sync | Generate file list via git ls-files (filtrando tracked+ignored)
+          ansible.builtin.shell:
+            cmd: |
+              cd "{{ additional_files_src }}"
+              git ls-files --cached --others --exclude-standard \
+                | git check-ignore --no-index --stdin -v -n 2>/dev/null \
+                | awk -F'\t' '$1 == "::" {print $2}'
+              true
+          delegate_to: localhost
+          become: false
+          changed_when: false
+          register: additional_files_list
+        
+        - name: Lab Sync | Remove transient .git directory
+          ansible.builtin.file:
+            path: "{{ additional_files_src }}/.git"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: additional_files_needs_git_init
+
+        # O 'copy' nao cria parents do dest, entao extraimos os diretorios
+        # unicos da lista e mandamos o 'file' criar tudo (com state=directory
+        # ele faz 'mkdir -p', criando os intermediarios sozinho).
+        - name: Lab Sync | Create destination parent directories
+          ansible.builtin.file:
+            path: "{{ additional_files_dest }}/{{ item }}"
+            state: directory
+            owner: "{{ additional_files_owner }}"
+            group: "{{ additional_files_group }}"
+            mode: "{{ additional_files_dir_mode }}"
+          loop: >-
+            {{
+              additional_files_list.stdout_lines
+              | map('dirname')
+              | reject('equalto', '')
+              | reject('equalto', '.')
+              | unique
+              | list
+            }}
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Lab Sync | Copy files (loop sobre a lista do git ls-files)
+          ansible.builtin.copy:
+            src: "{{ additional_files_src }}/{{ item }}"
+            dest: "{{ additional_files_dest }}/{{ item }}"
+            owner: "{{ additional_files_owner }}"
+            group: "{{ additional_files_group }}"
+            mode: "{{ additional_files_file_mode }}"
+          loop: "{{ additional_files_list.stdout_lines }}"
+          loop_control:
+            label: "{{ item }}"
+
+
+    - name: Lab Sync | Apply ownership and mode
+      ansible.builtin.shell: |
+        chown -R {{ additional_files_owner }}:{{ additional_files_group }} {{ additional_files_dest }}
+        find {{ additional_files_dest }} -type d -exec chmod {{ additional_files_dir_mode }} {} +
+        find {{ additional_files_dest }} -type f -exec chmod {{ additional_files_file_mode }} {} +
+      changed_when: false
+      when: additional_files_should_sync
