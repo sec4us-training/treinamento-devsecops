@@ -23,6 +23,18 @@
         docker compose down -v
       ignore_errors: true
 
+    - name: Azure Runner | Check existing .env for AZP_TOKEN
+      shell: |
+        if [ -f "{{ azure_runner_home }}/.env" ]; then
+          set -a
+          . "{{ azure_runner_home }}/.env"
+          set +a
+          echo -n "${AZP_TOKEN:-}"
+        fi
+      register: azure_runner_existing_token
+      changed_when: false
+      ignore_errors: true
+
     - name: Azure Runner | Remove directories
       file:
         path: "{{ item.path }}"
@@ -30,6 +42,7 @@
       with_items:
         - { path: "{{ azure_runner_home }}/ssh_keys" }
         - { path: "{{ azure_runner_home }}" }
+      when: azure_runner_existing_token.stdout | default('') | length == 0
 
     - name: Azure Runner | Create directories
       file:
@@ -247,11 +260,11 @@
                 - /etc/nginx/certs/root-ca.pem:/usr/local/share/ca-certificates/root-ca.crt:ro
                 - ./azure_agent_work:/azp/agent/_work
 
-
     - name: Azure Runner | Creating .env template
       copy:
         dest: "{{ azure_runner_home }}/.env"
         mode: '0600'
+        force: false
         content: |
           # Preenchido automaticamente por setup_azure_devops.py
           # AZP_URL=https://dev.azure.com/<organization>
@@ -259,6 +272,7 @@
           # AZP_POOL=Default
           # AZP_AGENT_NAME=sec4us-linux-runner
           # AZP_WORK=_work
+      when: azure_runner_existing_token.stdout | default('') | length == 0
 
     - name: Azure Runner | Creating setup_azure_devops.py
       copy:
@@ -611,6 +625,7 @@
     - name: Azure Runner | Build docker image
       shell: |
         cd {{ azure_runner_home }}
+        docker rmi {{ azure_runner_image }} || true
         docker build -t {{ azure_runner_image }} .
 
     - name: Azure Runner | Push docker image to local registry
