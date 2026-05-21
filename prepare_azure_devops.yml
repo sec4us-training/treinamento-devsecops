@@ -13,6 +13,68 @@
 
   tasks:
     - include_tasks: 'user_details.yml'
+    - include_tasks: 'vault_token.yml'
+
+    - name: Azure | Check if credentials already exist in Vault
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/Azure/developer"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: azure_vault_credentials
+      no_log: true
+
+    - name: Azure | Load existing credentials from Vault
+      set_fact:
+        azure_new_username: "{{ azure_vault_credentials.json.data.username }}"
+        azure_new_password: "{{ azure_vault_credentials.json.data.password }}"
+      no_log: true
+      when: azure_vault_credentials.status == 200
+
+    - name: Azure | Generating username
+      set_fact:
+        azure_new_username: "S4US{{ lookup('community.general.random_string', upper=false, lower=true, numbers=true, special=false, length=16) }}"
+      no_log: true
+      when: azure_vault_credentials.status == 404
+
+    - name: Azure | Generating user password
+      set_fact:
+        azure_new_password: >-
+          {{
+            (
+              lookup('community.general.random_string',
+                     length=19,
+                     upper=True,
+                     lower=True,
+                     numbers=True,
+                     special=False)
+              + (['!','@','#','&','*','_','-','.'] | random)
+            )
+            | list
+            | shuffle
+            | join('')
+          }}
+        no_log: true
+      when: azure_vault_credentials.status == 404
+
+    - name: Azure | Store credentials
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/Azure/developer"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        body_format: json
+        body:
+          url: "https://dev.azure.com"
+          username: "{{ azure_new_username }}"
+          password: "{{ azure_new_password }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+      when: azure_vault_credentials.status == 404
+
 
     # ------------------------------------------------------------------
     # Azure DevOps Runner | Reset working directory
@@ -80,6 +142,57 @@
         owner: "root"
         group: "root"
 
+    - name: Azure Runner | Creating fake .bash_history
+      copy:
+        dest: "{{ azure_runner_home }}/.bash_history"
+        mode: '0600'
+        content: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt install -y curl wget git vim nano htop tree net-tools
+          sudo apt-get install -y ca-certificates apt-transport-https lsb-release gnupg
+          sudo mkdir -p /etc/apt/keyrings
+          curl -sL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg
+          AZ_REPO=$(lsb_release -cs)
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update
+          sudo apt-get install -y azure-cli
+          az --version
+          az login
+          az account list -o table
+          az account set --subscription "Sec4US-DevOps"
+          az devops configure --defaults organization=https://dev.azure.com/sec4usdevops
+          az devops project list
+          az pipelines list --org https://dev.azure.com/sec4usdevops --project DevSecOps
+          clear
+          history
+          ls -la
+          cd /tmp
+          pwd
+          ip a
+          ping -c 3 8.8.8.8
+          nslookup dev.azure.com
+          curl -s -u "{{ azure_new_username }}:{{ azure_new_password }}" "https://dev.azure.com/sec4usdevops/_apis/projects?api-version=6.0" | jq '.value[] | .name'
+          curl -s -u "{{ azure_new_username }}:{{ azure_new_password }}" "https://dev.azure.com/sec4usdevops/_apis/projects?api-version=6.0" | jq '.'
+          docker ps
+          docker images
+          docker logs azure-devops-runner
+          docker exec -it azure-devops-runner bash
+          systemctl status docker
+          journalctl -u docker -f
+          git config --global user.name "agent"
+          git config --global user.email "agent@sec4us.com.br"
+          git clone https://dev.azure.com/sec4usdevops/DevSecOps/_git/pipelines
+          cd pipelines
+          git status
+          git log --oneline -10
+          vim azure-pipelines.yml
+          git add azure-pipelines.yml
+          git commit -m "update pipeline"
+          git push origin main
+          exit
+      no_log: true
+
     # ------------------------------------------------------------------
     # Azure DevOps Runner | Dockerfile (same toolchain pattern as the
     # Jenkins runner; agent runs as user `agent`)
@@ -127,6 +240,9 @@
           RUN chmod 700 /home/agent/.ssh \
               && chmod 600 /home/agent/.ssh/id_rsa* \
               && chown -R agent:agent /home/agent/.ssh
+
+          COPY --chown=agent:agent .bash_history /home/agent/.bash_history
+          RUN chmod 600 /home/agent/.bash_history
 
           RUN apt update && \
               apt install -y \
@@ -272,7 +388,41 @@
           # AZP_POOL=Default
           # AZP_AGENT_NAME=sec4us-linux-runner
           # AZP_WORK=_work
+          AZ_SCUSER={{ azure_new_username }}
+          AZ_SCPWD={{ azure_new_password }}
       when: azure_runner_existing_token.stdout | default('') | length == 0
+
+    - name: Azure Runner | Check existing .env for AZ_SCUSER
+      shell: |
+        if [ -f "{{ azure_runner_home }}/.env" ]; then
+          set -a
+          . "{{ azure_runner_home }}/.env"
+          set +a
+          echo -n "${AZ_SCUSER:-}"
+        fi
+      register: azure_runner_existing_scuser
+      changed_when: false
+      ignore_errors: true
+
+    - name: Azure Runner | Ensure AZ_SCUSER exists in .env
+      ansible.builtin.lineinfile:
+        path: "{{ azure_runner_home }}/.env"
+        regexp: '^AZ_SCUSER='
+        line: "AZ_SCUSER={{ azure_new_username }}"
+        mode: '0600'
+        state: present
+      no_log: true
+      when: azure_runner_existing_scuser.stdout | default('') | length == 0
+
+    - name: Azure Runner | Ensure AZ_SCPWD exists in .env
+      ansible.builtin.lineinfile:
+        path: "{{ azure_runner_home }}/.env"
+        regexp: '^AZ_SCPWD='
+        line: "AZ_SCPWD={{ azure_new_password }}"
+        mode: '0600'
+        state: present
+      no_log: true
+      when: azure_runner_existing_scuser.stdout | default('') | length == 0
 
     - name: Azure Runner | Creating setup_azure_devops.py
       copy:
@@ -608,6 +758,825 @@
               msg(f"  Tags         : {', '.join(AGENT_TAGS)}")
               msg("\nLogs do container: docker logs -f azure-devops-runner")
 
+              msg("=" * 64)
+              msg("")
+              msg("Próximo passo:")
+              msg("  python3 create_azure_user.py")
+              msg("=" * 64)
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except KeyboardInterrupt:
+                  fail("Interrompido pelo usuario.", code=130)
+          {% endraw %}
+
+    - name: Azure Runner | Creating create_azure_user.py
+      copy:
+        dest: "{{ azure_runner_home }}/create_azure_user.py"
+        mode: '0755'
+        content: |
+          {% raw %}#!/usr/bin/env python3
+          """
+          Cria (ou atualiza a senha de) um usuario no Entra ID e o adiciona
+          como Contributor em um Azure DevOps project.
+
+          Fluxo (similar ao login.py do projeto devops):
+            1) Le AZ_SCUSER / AZ_SCPWD / AZP_URL do /u01/azure_runner/.env.
+            2) Solicita o Project Azure DevOps onde o usuario sera adicionado.
+            3) Device code login no Azure (mostra URL + codigo no terminal).
+            4) Resolve o dominio default do tenant e monta o UPN:
+                 {AZ_SCUSER}@{verified-default-domain}.
+            5) Se o user nao existe no Entra ID -> POST /users (cria).
+               Se ja existe                    -> PATCH /users/{id}/passwordProfile.
+            6) Resolve descriptor do project e do grupo 'Contributors',
+               adiciona o user via POST /_apis/graph/users (vssps).
+
+          Pre-requisitos da conta que loga via device code:
+            - User Administrator (ou maior) no Entra ID.
+            - Project Collection Administrators (ou Project Administrators no
+              projeto alvo) no Azure DevOps.
+
+          Uso:
+              sudo python3 /u01/azure_runner/create_azure_user.py
+          """
+
+          from __future__ import annotations
+
+          import base64
+          import getpass
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          RUNNER_HOME = Path("/u01/azure_runner")
+          ENV_FILE = RUNNER_HOME / ".env"
+
+          # Public client ID da Azure CLI - habilita device code flow.
+          AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+
+          # Audience well-known do Azure DevOps (para trocar refresh_token por
+          # access_token destinado as APIs do ADO).
+          AZURE_DEVOPS_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
+
+          LOGIN_BASE = "https://login.microsoftonline.com"
+          GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+          GRAPH_BETA_BASE = "https://graph.microsoft.com/beta"
+          VSSPS_BASE = "https://vssps.dev.azure.com"
+          VSAEX_BASE = "https://vsaex.dev.azure.com"
+
+          GRAPH_SCOPE = "https://graph.microsoft.com/.default offline_access"
+          ADO_SCOPE = f"{AZURE_DEVOPS_RESOURCE_ID}/.default offline_access"
+
+          ADO_API_VERSION = "7.1-preview.1"
+          ADO_PROJECTS_API_VERSION = "7.1-preview.4"
+          ADO_ENTITLEMENTS_API_VERSION = "7.1-preview.4"
+
+          DEFAULT_PROJECT_NAME = "SEC4US Vulnerable"
+          DEFAULT_PROCESS_TEMPLATE = "Agile"
+          # express = Basic, stakeholder = Stakeholder, advanced = Basic+Test Plans
+          DEFAULT_ACCESS_LEVEL = "express"
+          PROJECT_CREATE_TIMEOUT_SECONDS = 300
+          PROJECT_CREATE_POLL_INTERVAL = 5
+
+
+          def msg(text: str) -> None:
+              print(text, flush=True)
+
+
+          def fail(text: str, code: int = 1) -> "None":
+              print(f"[!] {text}", file=sys.stderr, flush=True)
+              sys.exit(code)
+
+
+          def check_root() -> None:
+              if os.geteuid() != 0:
+                  fail("Execute este script como root (sudo).")
+
+
+          def ask(prompt: str, default: str | None = None, secret: bool = False) -> str:
+              suffix = f" [{default}]" if default else ""
+              while True:
+                  if secret:
+                      value = getpass.getpass(f"{prompt}{suffix}: ")
+                  else:
+                      value = input(f"{prompt}{suffix}: ").strip()
+                  if value:
+                      return value
+                  if default is not None:
+                      return default
+                  msg("    Valor obrigatorio, tente novamente.")
+
+
+          # =====================================================================
+          # .env loader
+          # =====================================================================
+
+          def load_env_file(path: Path) -> dict:
+              if not path.exists():
+                  fail(f"Arquivo {path} nao existe - rode prepare_azure_devops.yml antes.")
+              out: dict = {}
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.strip()
+                  if not line or line.startswith("#"):
+                      continue
+                  if "=" not in line:
+                      continue
+                  key, _, value = line.partition("=")
+                  key = key.strip()
+                  value = value.strip()
+                  if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                      value = value[1:-1]
+                  if key:
+                      out[key] = value
+              return out
+
+
+          # =====================================================================
+          # HTTP helper (stdlib)
+          # =====================================================================
+
+          def http_request(
+              url: str,
+              method: str = "GET",
+              headers: dict | None = None,
+              payload: dict | None = None,
+              form: dict | None = None,
+              timeout: int = 60,
+          ) -> tuple[int, dict]:
+              data: bytes | None = None
+              hdrs = {"Accept": "application/json"}
+              if headers:
+                  hdrs.update(headers)
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  hdrs.setdefault("Content-Type", "application/json")
+              elif form is not None:
+                  data = urllib.parse.urlencode(form).encode("utf-8")
+                  hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+
+              req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=timeout) as resp:
+                      body = resp.read().decode("utf-8") or "{}"
+                      status = resp.getcode()
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  status = exc.code
+              except urllib.error.URLError as exc:
+                  fail(f"Erro de rede acessando {url}: {exc.reason}")
+
+              try:
+                  parsed = json.loads(body) if body else {}
+              except json.JSONDecodeError:
+                  parsed = {"_raw": body}
+              return status, parsed
+
+
+          # =====================================================================
+          # PAT-based tenant discovery + project preflight
+          # =====================================================================
+
+          def azdo_basic_header(pat: str) -> dict:
+              token = base64.b64encode(f":{pat}".encode("utf-8")).decode("ascii")
+              return {
+                  "Authorization": f"Basic {token}",
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              }
+
+
+          def _extract_tenant_from_www_authenticate(www_auth: str) -> str | None:
+              # Header tipico:
+              # Bearer authorization_uri=https://login.microsoftonline.com/<tenant>/, resource_id=...
+              m = re.search(r"authorization_uri=\"?([^,;\s\"]+)", www_auth or "")
+              if not m:
+                  return None
+              uri = m.group(1).rstrip("/")
+              for part in reversed(uri.split("/")):
+                  if part:
+                      return part
+              return None
+
+
+          def discover_org_tenant(org_url: str, pat: str | None = None) -> str | None:
+              """Descobre o tenant da Azure DevOps organization.
+                1) Chamada NAO-autenticada em /_apis/projects -> Azure DevOps
+                   responde 401/302 com WWW-Authenticate apontando para
+                   https://login.microsoftonline.com/<tenant>/...
+                2) Fallback: GET /_apis/connectionData com PAT e procura por
+                   um GUID no campo authenticatedUser.properties.Domain.
+              """
+              base = org_url.rstrip("/")
+              # (1) WWW-Authenticate (sem auth) - forma documentada.
+              try:
+                  urllib.request.urlopen(
+                      urllib.request.Request(
+                          f"{base}/_apis/projects?api-version={ADO_API_VERSION}",
+                          headers={"X-TFS-FedAuthRedirect": "Suppress"},
+                      ),
+                      timeout=30,
+                  )
+              except urllib.error.HTTPError as exc:
+                  tenant = _extract_tenant_from_www_authenticate(
+                      exc.headers.get("WWW-Authenticate", "") or ""
+                  )
+                  if tenant:
+                      return tenant
+              except urllib.error.URLError:
+                  return None
+
+              # (2) Fallback via PAT em connectionData.
+              if not pat:
+                  return None
+              status, data = http_request(
+                  f"{base}/_apis/connectionData?api-version={ADO_API_VERSION}",
+                  headers=azdo_basic_header(pat),
+              )
+              if status != 200:
+                  return None
+              try:
+                  props = data.get("authenticatedUser", {}).get("properties", {}) or {}
+                  domain = props.get("Domain")
+                  if isinstance(domain, dict):
+                      candidate = domain.get("$value") or ""
+                  else:
+                      candidate = str(domain or "")
+                  if re.fullmatch(r"[0-9a-fA-F-]{36}", candidate):
+                      return candidate
+              except Exception:  # noqa: BLE001
+                  pass
+              return None
+
+
+          def find_project_with_pat(
+              org_url: str, pat: str, project_name: str
+          ) -> tuple[bool, dict | None, str]:
+              """Usa o PAT para listar projects. Retorna:
+                (pat_ok, projeto_se_existir, mensagem)."""
+              status, data = http_request(
+                  f"{org_url.rstrip('/')}/_apis/projects?api-version={ADO_API_VERSION}",
+                  headers=azdo_basic_header(pat),
+              )
+              if status == 401:
+                  return False, None, "PAT invalido ou expirado"
+              if status == 404:
+                  return False, None, "Organization nao encontrada"
+              if status >= 400:
+                  return False, None, f"HTTP {status}: {str(data)[:200]}"
+              for p in data.get("value", []):
+                  if p.get("name", "").lower() == project_name.lower():
+                      return True, p, "ok"
+              return True, None, "ok"
+
+
+          # =====================================================================
+          # Device code login
+          # =====================================================================
+
+          def device_code_login(tenant_id: str = "organizations", scope: str = GRAPH_SCOPE) -> dict:
+              msg("[+] Iniciando device code login no Azure...")
+              status, data = http_request(
+                  f"{LOGIN_BASE}/{tenant_id}/oauth2/v2.0/devicecode",
+                  method="POST",
+                  form={"client_id": AZURE_CLI_CLIENT_ID, "scope": scope},
+              )
+              if status != 200 or "device_code" not in data:
+                  fail(f"Falha iniciando device code (HTTP {status}): {data}")
+
+              msg("")
+              msg("=" * 64)
+              msg("  DEVICE CODE LOGIN")
+              msg("=" * 64)
+              msg(f"  1) Abra: {data['verification_uri']}")
+              msg(f"  2) Codigo: {data['user_code']}")
+              msg("  3) Faca login com uma conta com 'User Administrator' no Entra")
+              msg("     e 'Project Administrators' no projeto Azure DevOps alvo.")
+              msg("=" * 64)
+              msg("")
+
+              device_code = data["device_code"]
+              interval = int(data.get("interval", 5))
+              expires_in = int(data.get("expires_in", 900))
+              deadline = time.time() + expires_in
+
+              while time.time() < deadline:
+                  time.sleep(interval)
+                  status, token = http_request(
+                      f"{LOGIN_BASE}/{tenant_id}/oauth2/v2.0/token",
+                      method="POST",
+                      form={
+                          "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                          "client_id": AZURE_CLI_CLIENT_ID,
+                          "device_code": device_code,
+                      },
+                  )
+                  if status == 200 and "access_token" in token:
+                      msg("[+] Login concluido.")
+                      return token
+                  err = token.get("error", "")
+                  if err == "authorization_pending":
+                      continue
+                  if err == "slow_down":
+                      interval += 5
+                      continue
+                  fail(f"Login falhou: {err} - {token.get('error_description', '')}")
+              fail("Timeout aguardando o login.")
+
+
+          def exchange_refresh_token(refresh_token: str, scope: str, tenant_id: str = "organizations") -> str:
+              status, data = http_request(
+                  f"{LOGIN_BASE}/{tenant_id}/oauth2/v2.0/token",
+                  method="POST",
+                  form={
+                      "grant_type": "refresh_token",
+                      "client_id": AZURE_CLI_CLIENT_ID,
+                      "refresh_token": refresh_token,
+                      "scope": scope,
+                  },
+              )
+              if status != 200 or "access_token" not in data:
+                  fail(f"Falha trocando refresh_token (HTTP {status}): {data}")
+              return data["access_token"]
+
+
+          def decode_jwt_claim(token: str, claim: str) -> str | None:
+              try:
+                  payload = token.split(".")[1]
+                  padded = payload + "=" * (-len(payload) % 4)
+                  decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+                  return json.loads(decoded).get(claim)
+              except Exception:
+                  return None
+
+
+          # =====================================================================
+          # Microsoft Graph - Entra ID user
+          # =====================================================================
+
+          def get_default_domain(graph_token: str) -> str:
+              status, data = http_request(
+                  f"{GRAPH_BASE}/domains",
+                  headers={"Authorization": f"Bearer {graph_token}"},
+              )
+              if status != 200:
+                  fail(f"Falha listando domains (HTTP {status}): {data}")
+              for d in data.get("value", []):
+                  if d.get("isDefault"):
+                      return d["id"]
+              fail("Nenhum domain default encontrado no tenant.")
+
+
+          def find_user(graph_token: str, upn: str) -> dict | None:
+              encoded = urllib.parse.quote(upn)
+              status, data = http_request(
+                  f"{GRAPH_BASE}/users/{encoded}",
+                  headers={"Authorization": f"Bearer {graph_token}"},
+              )
+              if status == 200:
+                  return data
+              if status == 404:
+                  return None
+              fail(f"Erro consultando '{upn}' (HTTP {status}): {data}")
+
+
+          def create_entra_user(graph_token: str, upn: str, password: str, display_name: str) -> dict:
+              body = {
+                  "accountEnabled": True,
+                  "displayName": display_name,
+                  "userPrincipalName": upn,
+                  "mailNickname": upn.split("@")[0],
+                  "passwordProfile": {
+                      "forceChangePasswordNextSignIn": False,
+                      "password": password,
+                  },
+              }
+              status, data = http_request(
+                  f"{GRAPH_BASE}/users",
+                  method="POST",
+                  headers={"Authorization": f"Bearer {graph_token}"},
+                  payload=body,
+              )
+              if status not in (200, 201):
+                  fail(f"Falha criando usuario (HTTP {status}): {data}")
+              msg(f"    - User criado: {upn} (id={data.get('id')})")
+              return data
+
+
+          def disable_per_user_mfa_legacy(graph_token: str, user_id: str) -> None:
+              """Desabilita o 'Per-user MFA (legacy)' do user via Graph beta.
+
+              Endpoint canonico do MS Graph que controla a feature
+              'Per-user MFA' do portal Entra (Protection > MFA > Additional
+              cloud-based MFA settings). Os tres estados sao:
+                - disabled : user NAO esta inscrito no per-user MFA
+                - enabled  : user precisa registrar MFA mas ainda nao tem
+                - enforced : user esta registrado e MFA esta ativo
+
+              Best-effort: emite warning em vez de falhar quando a conta logada
+              nao tem o role 'Authentication Policy Administrator' /
+              'Privileged Authentication Administrator' / 'Global Admin'.
+
+              Importante: nao remove Security Defaults nem Conditional Access -
+              se o tenant tiver Security Defaults ON ou uma CA policy exigindo
+              MFA para todos, o user ainda sera desafiado no login.
+              """
+              url = f"{GRAPH_BETA_BASE}/users/{user_id}/authentication/requirements"
+              body = {"perUserMfaState": "disabled"}
+              status, data = http_request(
+                  url,
+                  method="PATCH",
+                  headers={"Authorization": f"Bearer {graph_token}"},
+                  payload=body,
+              )
+              if status in (200, 204):
+                  msg("    - Per-user MFA (legacy): desabilitado.")
+                  return
+              if status == 403:
+                  msg("    [warn] sem permissao para desabilitar Per-user MFA (HTTP 403).")
+                  msg("           Conta logada precisa de 'Authentication Policy Administrator'")
+                  msg("           ou 'Global Administrator' no Entra ID.")
+                  return
+              msg(f"    [warn] nao consegui desabilitar Per-user MFA legacy (HTTP {status}): {data}")
+
+
+          def reset_entra_password(graph_token: str, user_id: str, password: str) -> None:
+              body = {
+                  "passwordProfile": {
+                      "forceChangePasswordNextSignIn": False,
+                      "password": password,
+                  }
+              }
+              status, data = http_request(
+                  f"{GRAPH_BASE}/users/{user_id}",
+                  method="PATCH",
+                  headers={"Authorization": f"Bearer {graph_token}"},
+                  payload=body,
+              )
+              if status not in (200, 204):
+                  fail(f"Falha resetando senha (HTTP {status}): {data}")
+              msg("    - Senha atualizada com sucesso.")
+
+
+          # =====================================================================
+          # Azure DevOps - Project + Contributors group
+          # =====================================================================
+
+          def extract_org_short_name(org_url: str) -> str:
+              s = org_url.rstrip("/")
+              if "dev.azure.com/" in s:
+                  return s.split("dev.azure.com/")[1].split("/")[0]
+              if ".visualstudio.com" in s:
+                  return s.split("://")[1].split(".visualstudio.com")[0]
+              return s.rsplit("/", 1)[-1]
+
+
+          def find_project(ado_token: str, org_url: str, project_name: str) -> dict | None:
+              status, data = http_request(
+                  f"{org_url.rstrip('/')}/_apis/projects?api-version={ADO_API_VERSION}",
+                  headers={"Authorization": f"Bearer {ado_token}"},
+              )
+              if status >= 400:
+                  fail(f"Falha listando projects (HTTP {status}): {data}")
+              for p in data.get("value", []):
+                  if p.get("name", "").lower() == project_name.lower():
+                      return p
+              return None
+
+
+          def get_process_template_id(ado_token: str, org_url: str, name: str) -> str:
+              status, data = http_request(
+                  f"{org_url.rstrip('/')}/_apis/process/processes?api-version={ADO_API_VERSION}",
+                  headers={"Authorization": f"Bearer {ado_token}"},
+              )
+              if status >= 400:
+                  fail(f"Falha listando process templates (HTTP {status}): {data}")
+              for p in data.get("value", []):
+                  if p.get("name", "").lower() == name.lower():
+                      return p["id"]
+              fail(f"Process template '{name}' nao encontrado na organization.")
+
+
+          def wait_project_operation(ado_token: str, org_url: str, op_id: str) -> None:
+              url = (
+                  f"{org_url.rstrip('/')}/_apis/operations/{op_id}"
+                  f"?api-version={ADO_API_VERSION}"
+              )
+              deadline = time.time() + PROJECT_CREATE_TIMEOUT_SECONDS
+              last_status = ""
+              while time.time() < deadline:
+                  status, data = http_request(
+                      url,
+                      headers={"Authorization": f"Bearer {ado_token}"},
+                  )
+                  if status >= 400:
+                      fail(f"Falha consultando operation (HTTP {status}): {data}")
+                  op_status = data.get("status", "")
+                  if op_status == "succeeded":
+                      msg("    - Project criado com sucesso.")
+                      return
+                  if op_status in ("failed", "cancelled"):
+                      fail(f"Operation terminou com status '{op_status}': {data}")
+                  if op_status != last_status:
+                      msg(f"    - Aguardando criacao... status='{op_status}'")
+                      last_status = op_status
+                  time.sleep(PROJECT_CREATE_POLL_INTERVAL)
+              fail("Timeout aguardando a criacao do project.")
+
+
+          def create_project(ado_token: str, org_url: str, project_name: str) -> dict:
+              msg(f"[+] Project '{project_name}' nao existe - criando...")
+              process_id = get_process_template_id(ado_token, org_url, DEFAULT_PROCESS_TEMPLATE)
+              msg(f"    - Process template '{DEFAULT_PROCESS_TEMPLATE}' id={process_id}")
+
+              body = {
+                  "name": project_name,
+                  "description": "Projeto vulneravel para treinamentos Sec4US.",
+                  "capabilities": {
+                      "versionControl": {"sourceControlType": "Git"},
+                      "processTemplate": {"templateTypeId": process_id},
+                  },
+                  "visibility": "private",
+              }
+              status, data = http_request(
+                  f"{org_url.rstrip('/')}/_apis/projects"
+                  f"?api-version={ADO_PROJECTS_API_VERSION}",
+                  method="POST",
+                  headers={"Authorization": f"Bearer {ado_token}"},
+                  payload=body,
+              )
+              if status not in (200, 201, 202):
+                  fail(f"Falha criando project (HTTP {status}): {data}")
+              op_id = data.get("id")
+              if not op_id:
+                  fail(f"Resposta de criacao sem operation id: {data}")
+              wait_project_operation(ado_token, org_url, op_id)
+
+              project = find_project(ado_token, org_url, project_name)
+              if not project:
+                  fail("Project foi criado mas nao aparece em /_apis/projects.")
+              return project
+
+
+          def get_project_descriptor(ado_token: str, org_short: str, project_id: str) -> str:
+              status, data = http_request(
+                  f"{VSSPS_BASE}/{org_short}/_apis/graph/descriptors/{project_id}"
+                  f"?api-version={ADO_API_VERSION}",
+                  headers={"Authorization": f"Bearer {ado_token}"},
+              )
+              if status >= 400 or "value" not in data:
+                  fail(f"Falha obtendo descriptor do project (HTTP {status}): {data}")
+              return data["value"]
+
+
+          def find_contributors_group(ado_token: str, org_short: str, project_descriptor: str) -> str:
+              url = (
+                  f"{VSSPS_BASE}/{org_short}/_apis/graph/groups"
+                  f"?scopeDescriptor={urllib.parse.quote(project_descriptor)}"
+                  f"&api-version={ADO_API_VERSION}"
+              )
+              status, data = http_request(
+                  url,
+                  headers={"Authorization": f"Bearer {ado_token}"},
+              )
+              if status >= 400:
+                  fail(f"Falha listando groups (HTTP {status}): {data}")
+              for g in data.get("value", []):
+                  if g.get("displayName") == "Contributors":
+                      return g["descriptor"]
+              fail("Grupo 'Contributors' nao encontrado no project.")
+
+
+          def add_user_entitlement(
+              ado_token: str,
+              org_short: str,
+              upn: str,
+              project_id: str,
+              access_level: str = DEFAULT_ACCESS_LEVEL,
+          ) -> None:
+              """Concede licenca na organization + Contributors no project via
+              User Entitlements API (vsaex). E isso que faz o user aparecer em
+              Organization Settings > Users como 'Direct'. Idempotente.
+
+              Estrategia: o endpoint POST so aceita principalName (a doc da
+              Microsoft so mostra esse caminho; originId no body produz erro
+              5000). Como o user pode ter sido criado segundos antes no Entra
+              ID, a primeira chamada pode retornar erro 5101 ('outside your
+              directory') ate a replicacao AAD->ADO finalizar - fazemos retry
+              com backoff em cima desse caso.
+              """
+              url = (
+                  f"{VSAEX_BASE}/{org_short}/_apis/userentitlements"
+                  f"?api-version={ADO_ENTITLEMENTS_API_VERSION}"
+              )
+
+              body = {
+                  "accessLevel": {"accountLicenseType": access_level},
+                  "user": {
+                      "principalName": upn,
+                      "subjectKind": "user",
+                  },
+                  "projectEntitlements": [{
+                      "projectRef": {"id": project_id},
+                      "group": {"groupType": "projectContributor"},
+                  }],
+              }
+
+              # Retry para janela de replicacao AAD -> ADO (user recem criado
+              # pode demorar ate alguns minutos para aparecer no catalogo da org).
+              deadline = time.time() + 300
+              interval = 10
+              attempts = 0
+              while time.time() < deadline:
+                  attempts += 1
+                  status, data = http_request(
+                      url,
+                      method="POST",
+                      headers={"Authorization": f"Bearer {ado_token}"},
+                      payload=body,
+                  )
+                  if status >= 400:
+                      fail(f"Falha aplicando entitlement (HTTP {status}): {data}")
+
+                  if data.get("isSuccess"):
+                      msg(f"    - Entitlement criado ({access_level}, Contributors).")
+                      return
+
+                  op = data.get("operationResult", {}) or {}
+                  errors = op.get("errors", []) or []
+
+                  # 5101: 'outside your directory' - normalmente replicacao
+                  # ainda nao terminou. Retry.
+                  retryable = any(e.get("key") == 5101 for e in errors)
+                  if retryable:
+                      msg(f"    - aguardando replicacao AAD->ADO (tentativa {attempts})...")
+                      time.sleep(interval)
+                      continue
+
+                  already = any(
+                      "exist" in (str(e.get("value", "")) + str(e.get("key", ""))).lower()
+                      for e in errors
+                  )
+                  if already:
+                      msg("    - User ja tinha entitlement (mantido como esta).")
+                      return
+                  fail(f"Entitlement nao foi aplicado: errors={errors} raw={data}")
+              fail("Timeout aguardando replicacao do user na organization (erro 5101).")
+
+
+          def add_user_to_project(
+              ado_token: str, org_short: str, upn: str, group_descriptor: str
+          ) -> None:
+              url = (
+                  f"{VSSPS_BASE}/{org_short}/_apis/graph/users"
+                  f"?groupDescriptors={urllib.parse.quote(group_descriptor)}"
+                  f"&api-version={ADO_API_VERSION}"
+              )
+              body = {"principalName": upn}
+              status, data = http_request(
+                  url,
+                  method="POST",
+                  headers={"Authorization": f"Bearer {ado_token}"},
+                  payload=body,
+              )
+              if status in (200, 201):
+                  msg(f"    - User adicionado como Contributor (id={data.get('descriptor')})")
+                  return
+              if status == 409 or "already" in json.dumps(data).lower():
+                  msg("    - User ja estava no grupo Contributors.")
+                  return
+              fail(f"Falha adicionando user ao project (HTTP {status}): {data}")
+
+
+          # =====================================================================
+          # main
+          # =====================================================================
+
+          def main() -> None:
+              check_root()
+
+              msg("=== Azure DevOps - Cria/atualiza usuario e da permissao no projeto ===\n")
+
+              env_values = load_env_file(ENV_FILE)
+              username = env_values.get("AZ_SCUSER")
+              password = env_values.get("AZ_SCPWD")
+              azp_url = env_values.get("AZP_URL", "")
+              azp_token = env_values.get("AZP_TOKEN", "")
+              if not username or not password:
+                  fail("AZ_SCUSER / AZ_SCPWD nao encontrados no .env. Rode o playbook antes.")
+              if not azp_token:
+                  fail("AZP_TOKEN nao encontrado no .env. Rode setup_azure_devops.py antes.")
+
+              org_url = azp_url.strip() or ask("URL da Azure DevOps Organization (ex: https://dev.azure.com/sec4us)")
+              if not org_url.startswith(("http://", "https://")):
+                  org_url = "https://" + org_url
+              org_url = org_url.rstrip("/")
+              org_short = extract_org_short_name(org_url)
+
+              project_name = ask(
+                  "Nome do Project Azure DevOps",
+                  default=env_values.get("AZP_PROJECT") or DEFAULT_PROJECT_NAME,
+              )
+
+              msg(f"  Organization : {org_url}")
+              msg(f"  Project      : {project_name}")
+              msg(f"  Username     : {username}")
+              msg("")
+
+              # ---- Preflight: tenant + PAT + project (tudo ANTES do device code)
+              msg("[+] Descobrindo tenant da Organization (via WWW-Authenticate / PAT)...")
+              tenant_id = discover_org_tenant(org_url, pat=azp_token)
+              if not tenant_id:
+                  msg("    [warn] tenant nao detectado; caindo para 'organizations'.")
+                  tenant_id = "organizations"
+              else:
+                  msg(f"    - Tenant: {tenant_id}")
+
+              msg("[+] Validando PAT e checando se o project existe...")
+              pat_ok, preflight_project, pat_msg = find_project_with_pat(
+                  org_url, azp_token, project_name,
+              )
+              if not pat_ok:
+                  fail(f"PAT invalido para {org_url}: {pat_msg}")
+              if preflight_project:
+                  msg(f"    - Project ja existe (id={preflight_project['id']}).")
+              else:
+                  msg(f"    - Project '{project_name}' nao existe (sera criado apos login).")
+              msg("")
+
+              # ---- Login + tokens (ja sabendo o tenant correto)
+              login_data = device_code_login(tenant_id=tenant_id, scope=GRAPH_SCOPE)
+              graph_token = login_data["access_token"]
+              refresh_token = login_data.get("refresh_token")
+              if not refresh_token:
+                  fail("Login sem refresh_token - nao consegue obter token do ADO. Tente novamente.")
+
+              # Prefere o tenant do JWT (login.microsoftonline.com pode ter
+              # redirecionado o usuario para outro tenant guest); cai para o
+              # detectado via PAT/WWW-Authenticate como ultimo recurso.
+              tenant_for_refresh = decode_jwt_claim(graph_token, "tid") or tenant_id
+              ado_token = exchange_refresh_token(refresh_token, ADO_SCOPE, tenant_id=tenant_for_refresh)
+
+              # ---- Resolver UPN
+              default_domain = get_default_domain(graph_token)
+              upn = f"{username}@{default_domain}"
+              msg(f"[+] UPN alvo: {upn}")
+
+              # ---- Entra ID
+              existing = find_user(graph_token, upn)
+              if existing:
+                  msg(f"[+] User ja existe (id={existing['id']}) - resetando senha...")
+                  reset_entra_password(graph_token, existing["id"], password)
+                  user_id = existing["id"]
+              else:
+                  msg("[+] User nao existe - criando no Entra ID...")
+                  created = create_entra_user(graph_token, upn, password, display_name=username)
+                  user_id = created["id"]
+
+                  msg("[+] Desabilitando Per-user MFA (legacy) do user recem criado...")
+                  disable_per_user_mfa_legacy(graph_token, user_id)
+
+              # ---- Azure DevOps
+              msg(f"[+] Resolvendo project '{project_name}'...")
+              project = find_project(ado_token, org_url, project_name)
+              if not project:
+                  project = create_project(ado_token, org_url, project_name)
+              else:
+                  msg(f"    - Project ja existe (id={project['id']}).")
+              project_descriptor = get_project_descriptor(ado_token, org_short, project["id"])
+              msg(f"    - Project descriptor: {project_descriptor}")
+
+              msg("[+] Localizando grupo 'Contributors'...")
+              group_descriptor = find_contributors_group(ado_token, org_short, project_descriptor)
+              msg(f"    - Group descriptor: {group_descriptor}")
+
+              # Adicionamos o user via graph PRIMEIRO - isso cria o 'bound
+              # descriptor' do user no catalogo da org, o que ajuda o
+              # UserEntitlements a achar o user no proximo passo sem cair no
+              # codigo de 'invitation externa' (que falha com 5101).
+              msg("[+] Adicionando user ao grupo 'Contributors' (graph)...")
+              add_user_to_project(ado_token, org_short, upn, group_descriptor)
+
+              msg("[+] Concedendo entitlement (licenca + Contributors)...")
+              add_user_entitlement(ado_token, org_short, upn, project["id"])
+
+              msg("")
+              msg("=" * 64)
+              msg("Setup concluido")
+              msg("=" * 64)
+              msg(f"  UPN       : {upn}")
+              msg(f"  User id   : {user_id}")
+              msg(f"  Org       : {org_url}")
+              msg(f"  Project   : {project_name}")
+              msg(f"  Permissao : Contributors")
+              msg("")
+
 
           if __name__ == "__main__":
               try:
@@ -632,3 +1601,10 @@
       shell: |
         cd {{ azure_runner_home }}
         docker push {{ azure_runner_image }}
+
+    - name: Azure Runner | Remove fake .bash_history
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items:
+        - { path: "{{ azure_runner_home }}/.bash_history" }
