@@ -90,16 +90,18 @@
         # commitados antes de serem adicionados ao .gitignore (ex: .DS_Store)
         # continuam la, e --exclude-standard so filtra na parte --others.
         # Solucao: pipe pelo 'check-ignore --no-index' que aplica os patterns
-        # do .gitignore mesmo a arquivos tracked, e o awk fica so com as
-        # linhas '::' (non-matching = NAO ignorados). Registramos o output
-        # para iterar via copy.
+        # do .gitignore mesmo a arquivos tracked. O awk mantem:
+        #   - linhas '::' (non-matching = nenhum pattern bateu)
+        #   - linhas cujo pattern comeca com '!' (negacao = re-inclusao,
+        #     o arquivo NAO esta ignorado, ex.: !**/requirements.txt)
+        # Registramos o output para iterar via copy.
         - name: Lab Sync | Generate file list via git ls-files (filtrando tracked+ignored)
           ansible.builtin.shell:
             cmd: |
               cd "{{ additional_files_src }}"
               git ls-files --cached --others --exclude-standard \
                 | git check-ignore --no-index --stdin -v -n 2>/dev/null \
-                | awk -F'\t' '$1 == "::" {print $2}'
+                | awk -F'\t' '$1 == "::" || $1 ~ /^[^:]*:[0-9]+:!/ {print $2}'
               true
           delegate_to: localhost
           become: false
