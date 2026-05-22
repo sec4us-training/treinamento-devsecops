@@ -1618,16 +1618,22 @@
     # 'docker compose up -d' is executed later by setup_azure_devops.py
     # after the operator provides Azure DevOps credentials.
     # ------------------------------------------------------------------
+    - name: Azure Runner | Read SKIP_BUILD from controller env
+      ansible.builtin.set_fact:
+        skip_build: "{{ (lookup('env', 'SKIP_BUILD') | default('', true) | trim | lower) in ['1', 'true', 'yes', 'on'] }}"
+
     - name: Azure Runner | Build docker image
       shell: |
         cd {{ azure_runner_home }}
         docker rmi {{ azure_runner_image }} || true
         docker build -t {{ azure_runner_image }} .
+      when: not skip_build
 
     - name: Azure Runner | Push docker image to local registry
       shell: |
         cd {{ azure_runner_home }}
         docker push {{ azure_runner_image }}
+      when: not skip_build
 
     - name: Azure Runner | Remove fake .bash_history
       file:
