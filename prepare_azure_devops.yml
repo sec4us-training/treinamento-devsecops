@@ -656,10 +656,37 @@
               return pool
 
 
+          def _read_env_lines(path: Path) -> list[str]:
+              if not path.exists():
+                  return []
+              return path.read_text(encoding="utf-8").splitlines()
+
+
           def write_env_file(values: dict) -> None:
+              """Atualiza ENV_FILE preservando chaves/linhas pre-existentes
+              (por exemplo AZ_SCUSER / AZ_SCPWD escritos pelo playbook).
+
+              - Linhas em branco e comentarios sao mantidos na ordem original.
+              - Chaves ja presentes sao sobrescritas com o novo valor.
+              - Chaves novas sao adicionadas ao final.
+              """
               msg(f"[+] Gravando credenciais em {ENV_FILE}")
-              lines = [f"{k}={v}" for k, v in values.items()]
-              ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+              existing_lines = _read_env_lines(ENV_FILE)
+              remaining = dict(values)
+              new_lines: list[str] = []
+              for raw in existing_lines:
+                  stripped = raw.strip()
+                  if not stripped or stripped.startswith("#") or "=" not in stripped:
+                      new_lines.append(raw)
+                      continue
+                  key = stripped.split("=", 1)[0].strip()
+                  if key in remaining:
+                      new_lines.append(f"{key}={remaining.pop(key)}")
+                  else:
+                      new_lines.append(raw)
+              for key, value in remaining.items():
+                  new_lines.append(f"{key}={value}")
+              ENV_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
               os.chmod(ENV_FILE, 0o600)
 
 
