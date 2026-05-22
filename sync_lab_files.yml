@@ -52,12 +52,13 @@
       when: additional_files_should_sync
 
     # Estratégia: 'git ls-files' aplica os .gitignore (todos, em qualquer
-    # profundidade) com as semantics oficiais do git, melhor que aproximação
-    # do rsync. A lista filtrada vai para um arquivo e o rsync consome via
-    # '--files-from=FILE' (sem espaço no argumento, não quebra no
-    # synchronize do Ansible). Se o source não for um git repo, fazemos um
-    # 'git init' transitório só para conseguir rodar o ls-files, e
-    # removemos o .git no final (no 'always', para limpar mesmo se falhar).
+    # profundidade) com as semantics oficiais do git. A lista filtrada
+    # alimenta 'zip -@' (lê paths via stdin) para empacotar tudo num único
+    # .zip, que é enviado em uma única transferência e extraído remotamente
+    # — muito mais rápido que loop de 'copy' (uma sessão SSH por arquivo).
+    # Requer 'zip' no controller e 'unzip' no target (ansible.builtin.unarchive).
+    # Se o source não for git repo, fazemos um 'git init' transitório só
+    # para rodar o ls-files, e removemos o .git no final.
     - name: Lab Sync | Check if source is a git repo
       ansible.builtin.stat:
         path: "{{ additional_files_src }}/.git"
@@ -113,38 +114,55 @@
           become: false
           when: additional_files_needs_git_init
 
-        # O 'copy' nao cria parents do dest, entao extraimos os diretorios
-        # unicos da lista e mandamos o 'file' criar tudo (com state=directory
-        # ele faz 'mkdir -p', criando os intermediarios sozinho).
-        - name: Lab Sync | Create destination parent directories
-          ansible.builtin.file:
-            path: "{{ additional_files_dest }}/{{ item }}"
-            state: directory
-            owner: "{{ additional_files_owner }}"
-            group: "{{ additional_files_group }}"
-            mode: "{{ additional_files_dir_mode }}"
-          loop: >-
-            {{
-              additional_files_list.stdout_lines
-              | map('dirname')
-              | reject('equalto', '')
-              | reject('equalto', '.')
-              | unique
-              | list
-            }}
-          loop_control:
-            label: "{{ item }}"
+        - name: Lab Sync | Generating random string
+          set_fact:
+            ansible_play_rnd: "{{ lookup('community.general.random_string', upper=false, lower=true, numbers=false, special=false, length=16) }}"
 
-        - name: Lab Sync | Copy files (loop sobre a lista do git ls-files)
+        - name: Lab Sync | Set zip paths
+          ansible.builtin.set_fact:
+            additional_files_zip_local: "/tmp/lab_files_{{ ansible_play_rnd }}.zip"
+            additional_files_zip_remote: "/tmp/lab_files_{{ ansible_play_rnd }}.zip"
+
+        # Empacota localmente usando a lista filtrada via stdin ('zip -@').
+        # '-q' silencia o output; sem '-r' porque a lista já contém só arquivos
+        # individuais (não queremos que zip re-expanda diretórios).
+        - name: Lab Sync | Create local zip from filtered file list
+          ansible.builtin.shell:
+            cmd: zip -q -@ "{{ additional_files_zip_local }}"
+            chdir: "{{ additional_files_src }}"
+            stdin: "{{ additional_files_list.stdout }}"
+          delegate_to: localhost
+          become: false
+          changed_when: false
+          when: additional_files_list.stdout_lines | length > 0
+
+        - name: Lab Sync | Ship zip to remote
           ansible.builtin.copy:
-            src: "{{ additional_files_src }}/{{ item }}"
-            dest: "{{ additional_files_dest }}/{{ item }}"
+            src: "{{ additional_files_zip_local }}"
+            dest: "{{ additional_files_zip_remote }}"
+            mode: "0600"
+          when: additional_files_list.stdout_lines | length > 0
+
+        - name: Lab Sync | Extract zip at destination
+          ansible.builtin.unarchive:
+            src: "{{ additional_files_zip_remote }}"
+            dest: "{{ additional_files_dest }}"
+            remote_src: yes
             owner: "{{ additional_files_owner }}"
             group: "{{ additional_files_group }}"
-            mode: "{{ additional_files_file_mode }}"
-          loop: "{{ additional_files_list.stdout_lines }}"
-          loop_control:
-            label: "{{ item }}"
+          when: additional_files_list.stdout_lines | length > 0
+
+        - name: Lab Sync | Cleanup remote zip
+          ansible.builtin.file:
+            path: "{{ additional_files_zip_remote }}"
+            state: absent
+
+        - name: Lab Sync | Cleanup local zip
+          ansible.builtin.file:
+            path: "{{ additional_files_zip_local }}"
+            state: absent
+          delegate_to: localhost
+          become: false
 
 
     - name: Lab Sync | Apply ownership and mode
