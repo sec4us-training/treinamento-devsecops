@@ -1,0 +1,74 @@
+---
+# Flag do exercício no runner Windows: um arquivo em C:\secrets\flag.txt com um
+# `FLAG{...}` de 60 caracteres aleatórios, publicado como credencial do
+# laboratório (`__SEC4US_CRED__`) para a correção.
+#
+# A flag é sorteada UMA vez: se o arquivo já existe, o valor dele é reaproveitado
+# e só republicado. Sortear de novo a cada execução invalidaria o que já foi
+# entregue ao aluno — e o passo do pipeline roda com `force: true`, justamente
+# para republicar a credencial em toda execução.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars:
+    flag_dir: 'C:\secrets'
+    flag_path: 'C:\secrets\flag.txt'
+    flag_length: 60
+    # O conjunto de especiais pedido — substitui o padrão do lookup. Note que
+    # não há `"` aqui: é o único caractere que o marcador de credencial trata
+    # como fim do valor (o `}` do `FLAG{...}` atravessa inteiro).
+    flag_special: '!@#$&*'
+
+  tasks:
+
+    - name: Flags | Garantir o diretório
+      ansible.windows.win_file:
+        path: "{{ flag_dir }}"
+        state: directory
+
+    - name: Flags | A flag já existe?
+      ansible.windows.win_stat:
+        path: "{{ flag_path }}"
+      register: flag_stat
+
+    - name: Flags | Ler a flag já gravada
+      ansible.windows.win_shell: Get-Content -Path '{{ flag_path }}' -Raw
+      register: flag_existing
+      changed_when: false
+      when: flag_stat.stat.exists
+      no_log: true
+
+    - name: Flags | Sortear uma flag nova
+      ansible.builtin.set_fact:
+        flag_value: "{{ lookup('community.general.random_string',
+                               length=flag_length,
+                               upper=True, lower=True, numbers=True,
+                               special=True, override_special=flag_special,
+                               min_lower=1, min_upper=1, min_numeric=1, min_special=1) }}"
+      when: not flag_stat.stat.exists
+      no_log: true
+
+    # O `if/else` do Jinja é preguiçoso: quando o arquivo existe, o ramo do
+    # `flag_value` (indefinido) nem é avaliado.
+    - name: Flags | Definir o FLAG_TEXT
+      ansible.builtin.set_fact:
+        FLAG_TEXT: >-
+          {{ (flag_existing.stdout | trim)
+             if flag_stat.stat.exists
+             else ('FLAG{' ~ flag_value ~ '}') }}
+      no_log: true
+
+    - name: Flags | Gravar o C:\secrets\flag.txt
+      ansible.windows.win_copy:
+        content: "{{ FLAG_TEXT }}"
+        dest: "{{ flag_path }}"
+      when: not flag_stat.stat.exists
+      no_log: true
+
+    # Sem `no_log`: é da LINHA DE LOG deste passo que o orquestrador extrai a
+    # credencial. Quem lê o log da execução vê a flag.
+    - name: Flgs | Windows Flag
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::win_runner_txt::{{ FLAG_TEXT }}"

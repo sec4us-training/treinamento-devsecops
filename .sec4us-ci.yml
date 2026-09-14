@@ -19,7 +19,7 @@
 # orquestrador acompanha essa troca e passa a falar com ela no endereço novo.
 machines:
   - id: devsecops
-    name: "DEVSECOPS - servidor do laboratório"
+    name: "Container server"
     group: "Lab DevSecOps"
     template: "Ubuntu 24.04"
     ip: "192.168.30.249"
@@ -27,13 +27,13 @@ machines:
       # O README pede 8 GB / 60 GB como MÍNIMO. Com GitLab + Jenkins + SonarQube
       # + JFrog + Vault + registry + os containers dos runners no mesmo host, o
       # mínimo não sobrevive ao primeiro pipeline da turma.
-      vm_num_cpus: 4
+      vm_num_cpus: 8
       vm_memory_mb: 16384
       vm_disk_gb: 80
       datastore: "datastore2"
 
   - id: runner2
-    name: "DEVSECOPS - Windows Runner"
+    name: "Windows Runner"
     group: "Lab DevSecOps"
     template: "Windows Server 2022"
     ip: "192.168.30.248"
@@ -597,6 +597,14 @@ jenkins-runner-win:
     - name: Configurar o runner do Jenkins no windows
       ansible:
         name: windows/jenkins_runner.yml
+
+    # `force: true` para republicar a credencial em toda execução. A flag em si
+    # é sorteada uma vez só: o playbook reaproveita a que já estiver no
+    # C:\secrets\flag.txt.
+    - name: Flag do exercício no runner Windows
+      force: true
+      ansible:
+        name: windows/flag.yml
 
 
 # --- repositórios da turma ---------------------------------------------------
