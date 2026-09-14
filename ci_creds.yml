@@ -1,34 +1,48 @@
 ---
-# Credenciais de acesso ao servidor, publicadas para o vm_manager.
+# Fechamento do acesso ao servidor e dados de rede do laboratório.
 #
-# O marcador `__SEC4US_CRED__::<nome>::<valor>` no output de um passo vira uma
-# credencial da máquina na tela do laboratório. As senhas e tokens dos SERVIÇOS
-# já saem dos próprios playbooks de instalação (install_vault, install_gitlab,
-# install_jfrog, install_sonar, install_jenkins); o que falta é o acesso ao
-# servidor em si — o bloco que o deploy.sh imprime no final.
+# O `vars.yml` traz a senha do usuário do servidor em claro
+# (`default_password`), e o `setup_base.yml` a aplica no `local_username`. Isso
+# é um atalho para o laboratório inteiro: o arquivo está versionado num
+# repositório público E é o histórico desse mesmo repositório que o Web01
+# publica para o exercício — ou seja, a senha do servidor está ao alcance de
+# quem ainda não resolveu nada.
 #
-# A chave SSH privada não entra aqui: o marcador lê uma linha só, e ela está no
-# Vault (secret/devops-server/ssh), que é onde a prática espera encontrá-la.
+# Este playbook fecha isso no fim do pipeline: troca a senha do
+# `local_username` por 40 caracteres aleatórios e NÃO publica o valor em lugar
+# nenhum. Não é uma credencial a entregar, é uma porta a fechar — quem precisa
+# entrar no servidor entra como root pela chave SSH que o `ci_prepare.yml`
+# instala no `authorized_keys`.
+#
+# A senha é sorteada A CADA EXECUÇÃO: nada depende dela, então não há o que
+# invalidar ao girá-la de novo.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não chama este playbook e
+# continua com o comportamento de sempre.
 - hosts: all
   become: yes
   vars:
     ansible_python_interpreter: "/usr/bin/python3"
+    server_password_length: 40
 
   vars_files:
     - vars.yml
 
   tasks:
 
-    - name: Creds | Usuário do servidor
-      ansible.builtin.debug:
-        msg: "__SEC4US_CRED__::Servidor Usuario::{{ local_username }}"
+    - name: Creds | Sortear a senha do usuário do servidor
+      ansible.builtin.set_fact:
+        server_password: "{{ lookup('community.general.random_string',
+                                    length=server_password_length,
+                                    upper=True, lower=True, numbers=True,
+                                    special=False) }}"
+      no_log: true
 
-    - name: Creds | Senha do servidor
-      ansible.builtin.debug:
-        msg: "__SEC4US_CRED__::Servidor Senha::{{ default_password }}"
-
-    # Forward proxy do laboratório: dispensa o aluno de editar o arquivo hosts
-    # para resolver os *.labs.sec4us.com.br (veja o README.md).
-    - name: Creds | Squid (forward proxy)
-      ansible.builtin.debug:
-        msg: "__SEC4US_CRED__::Squid Proxy::{{ ansible_host | default(inventory_hostname) }}:48284"
+    # `chpasswd` é o que o setup_base.yml já usa para este mesmo usuário. O
+    # módulo `user` exigiria gerar o hash no ORQUESTRADOR (`password_hash`), que
+    # depende do `crypt` — removido do python 3.13.
+    - name: Creds | Trocar a senha do usuário do servidor
+      ansible.builtin.shell:
+        cmd: "echo '{{ local_username }}:{{ server_password }}' | chpasswd"
+      changed_when: true
+      no_log: true

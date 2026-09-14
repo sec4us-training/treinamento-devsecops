@@ -778,15 +778,18 @@ lab-files:
 # --- credenciais do laboratório pronto ---------------------------------------
 # As senhas e tokens dos serviços já são publicados pelos próprios playbooks de
 # instalação (`__SEC4US_CRED__::...` no install_vault, install_gitlab,
-# install_jfrog, install_sonar e install_jenkins). O que falta é o acesso ao
-# servidor em si — o que o deploy.sh imprime no final.
+# install_jfrog, install_sonar e install_jenkins). Aqui sai o resto.
 credentials:
   stage: finish
   needs: lab-files
   runs-on: devsecops
   force: true
   steps:
-    - name: Publicar as credenciais de acesso ao servidor
+    # FECHA o acesso por senha ao servidor: a senha do usuário do servidor está
+    # em claro no vars.yml versionado, que é o que o Web01 publica. O playbook a
+    # troca por uma aleatória e descarta o valor — não publica credencial
+    # nenhuma. O deploy.sh não chama este playbook e segue como sempre.
+    - name: Girar a senha do usuário do servidor
       ansible:
         name: ci_creds.yml
 

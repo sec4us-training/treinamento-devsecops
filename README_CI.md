@@ -223,10 +223,25 @@ GitLab Token, JFrog Admin Password, JFrog Access Token, Sonar Admin Password,
 Sonar Admin Token, Jenkins Admin Password). Elas aparecem na tela de credenciais
 da máquina.
 
-O job `credentials` (`ci_creds.yml`) fecha a lista com o que o `deploy.sh`
-imprimia no final: usuário e senha do servidor e o endereço do Squid. A chave SSH
-privada não entra ali — o marcador lê uma linha só, e ela está no Vault, que é
-onde a prática espera encontrá-la.
+O job `credentials` publica mais uma: a **flag do servidor Linux**
+(`ci_flag.yml`, um `FLAG{...}` gravado em `/root/flag.txt`). A chave SSH privada
+não entra ali — o marcador lê uma linha só, e ela está no Vault, que é onde a
+prática espera encontrá-la.
+
+### O que o pipeline NÃO entrega
+
+O `ci_creds.yml` **não publica mais nada** — nem o usuário e a senha do servidor,
+que o `deploy.sh` imprime no final, nem o endereço do Squid. Ao contrário: ele
+troca a senha do `local_username` por 40 caracteres aleatórios e descarta o
+valor.
+
+O motivo é que o `default_password` do `vars.yml` está versionado num
+repositório público — e é o histórico desse mesmo repositório que o Web01
+publica para o exercício. Deixar a senha valendo seria entregar o servidor
+inteiro a quem ainda não resolveu nada. Quem precisa entrar entra como `root`
+pela chave SSH que o `ci_prepare.yml` instala no `authorized_keys`.
+
+No fluxo do `deploy.sh` nada disso acontece: ele não chama o `ci_creds.yml`.
 
 ## Arquivos novos
 
