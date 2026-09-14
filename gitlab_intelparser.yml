@@ -233,6 +233,10 @@
       retries: 30
       delay: 10
 
+    - name: Creds | GitLab IntelParser Vault Token
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Vault Token - jFrog Admin::{{ intelparser_vault_token }}"
+
     - name: GitLab | Create CI/CD variable VAULT_TOKEN
       ansible.builtin.uri:
         url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
