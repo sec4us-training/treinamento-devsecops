@@ -22,7 +22,7 @@ machines:
     name: "DEVSECOPS - servidor do laboratório"
     group: "Lab DevSecOps"
     # Nome do template de deploy Linux em produção — ajuste se o seu tiver outro.
-    template: "Ubuntu 22.04"
+    template: "Ubuntu 24.04"
     ip: "192.168.30.249"
     params:
       # O README pede 8 GB / 60 GB como MÍNIMO. Com GitLab + Jenkins + SonarQube
