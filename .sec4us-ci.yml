@@ -86,7 +86,7 @@ variables:
   # Sem isto tudo que é do próprio laboratório sairia pelo proxy: os
   # `*.labs.sec4us.com.br` resolvem para 127.0.0.1 no servidor, e o registry
   # local é um deles.
-  NO_PROXY: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
+  NO_PROXY: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2,0.0.0.0/32"
 
   # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
   # os copia para /u01/lab_files. Vazio = o passo não copia nada.
