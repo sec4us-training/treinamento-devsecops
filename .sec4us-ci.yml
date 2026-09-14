@@ -86,7 +86,15 @@ variables:
   # Sem isto tudo que é do próprio laboratório sairia pelo proxy: os
   # `*.labs.sec4us.com.br` resolvem para 127.0.0.1 no servidor, e o registry
   # local é um deles.
-  NO_PROXY: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2,0.0.0.0/32"
+  #
+  # As entradas valem também DENTRO dos containers, que herdam estas variáveis
+  # do `proxies.default` do docker. Daí:
+  #   0.0.0.0, 0.0.0.0/32 -> o endereço "unspecified" não é loopback, então o
+  #     Go (vault, docker, jf) o manda para o proxy. As duas formas porque nem
+  #     todo cliente entende CIDR aqui (curl antigo, `requests` do python).
+  #   172.16.0.0/12 -> a faixa das bridges do docker, onde vivem o
+  #     `host-gateway` e os containers falando entre si por IP.
+  NO_PROXY: "localhost,127.0.0.1,::1,0.0.0.0,0.0.0.0/32,172.16.0.0/12,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
 
   # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
   # os copia para /u01/lab_files. Vazio = o passo não copia nada.

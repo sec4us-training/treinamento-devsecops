@@ -145,6 +145,23 @@ Os dois jobs rodam com `force: true`: a configuração é persistente, mas reapl
 > no servidor e o registry local é um deles. Sem as exceções, o laboratório
 > tentaria falar consigo mesmo através do proxy.
 
+Ele vale **dentro dos containers** também, que herdam as variáveis do
+`proxies.default`. Por isso a lista tem `0.0.0.0` (o endereço "unspecified" não é
+loopback, então a lib de HTTP do Go o manda para o proxy) e `172.16.0.0/12` (as
+bridges do docker, onde ficam o `host-gateway` e os containers falando entre si).
+
+Um efeito desse tipo é silencioso: quando o `VAULT_ADDR` do container do Vault
+era `http://0.0.0.0:8200`, o `vault status` do entrypoint levava 403 do proxy, o
+laço de espera estourava e o Vault ficava **selado** — de pé, com a porta 8200
+respondendo, e o deploy seguindo em frente. Endereço que um cliente disca dentro
+de um container deve ser loopback; o Go isenta loopback sempre, sem depender de
+`NO_PROXY`.
+
+> Variável de ambiente de container é fixada na **criação**. Mudar o `NO_PROXY`
+> aqui não alcança containers que já existem — eles precisam ser recriados
+> (`docker compose up -d --force-recreate`, ou uma execução nova do stage que os
+> cria).
+
 ## O par de chaves do laboratório
 
 O `deploy.sh` gera um par de chaves, autoriza a pública no `secops` e no `root` e

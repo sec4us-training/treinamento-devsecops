@@ -169,7 +169,18 @@
 
               environment:
                 TZ: America/Sao_Paulo
-                VAULT_ADDR: "http://0.0.0.0:8200"
+                # VAULT_ADDR é o endereço que o CLIENTE disca — é por ele que o
+                # unseal.sh fala com o servidor. Tem que ser loopback: com
+                # 0.0.0.0 e um proxy no ambiente (o HTTP_PROXY que o docker
+                # injeta nos containers), a lib de HTTP do Go manda a chamada
+                # para o proxy, porque 0.0.0.0 não é loopback e sim
+                # "unspecified". O resultado era o `vault status` do entrypoint
+                # levar 403 do proxy, o laço estourar as 60 tentativas e o Vault
+                # ficar SELADO — de pé, com a 8200 respondendo, mas selado.
+                # Loopback o Go isenta sempre, sem depender de NO_PROXY.
+                VAULT_ADDR: "http://127.0.0.1:8200"
+                # Este é o endereço ANUNCIADO (redirects de HA), não um alvo de
+                # requisição: pode continuar ouvindo em todas as interfaces.
                 VAULT_API_ADDR: "http://0.0.0.0:8200"
 
               cap_add:
