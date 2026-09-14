@@ -53,7 +53,7 @@
     # na máquina dele — não há DNS do laboratório, e o Squid não serve para o
     # agente do Jenkins.
     - name: Baseline | Apontar os serviços do laboratório para o DevSecOps
-      community.windows.win_hosts_entry:
+      community.windows.win_hosts:
         canonical_name: "{{ item }}"
         ip_address: "{{ devsecops_ip }}"
         state: present
