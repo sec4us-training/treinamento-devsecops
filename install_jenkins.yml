@@ -101,8 +101,65 @@
         mode: 0777
       with_items:
           - { path: "{{ JENKINS_HOME }}" }
-          - { path: "{{ JENKINS_HOME }}/home/" }     
-          - { path: "{{ JENKINS_HOME }}/home/.ssh/" }    
+          - { path: "{{ JENKINS_HOME }}/home/" }
+          - { path: "{{ JENKINS_HOME }}/home/.ssh/" }
+
+    # ------------------------------------------------------------------
+    # Proxy de saída — o Jenkins é Java e NÃO lê HTTP_PROXY/HTTPS_PROXY do
+    # ambiente. Numa rede sem rota direta para a internet, sem isto o update
+    # center não sai pelo proxy e NENHUM plugin é baixado.
+    #
+    # A falha é silenciosa e cara: o `installPlugins` responde 200, a fila do
+    # update center fica vazia, a task de espera passa na hora — e o deploy só
+    # morre ~100 tasks adiante, num 404 do /credentials/... (a rota que o plugin
+    # `credentials`, que nunca foi instalado, publicaria).
+    #
+    # O proxy vem das `variables:` do .sec4us-ci.yml, que chegam como extra-vars.
+    # No fluxo do deploy.sh elas não existem, o `persistir` dá false e os dois
+    # passos são pulados — nada muda lá.
+    # ------------------------------------------------------------------
+    - name: Jenkins | Proxy | Ler o proxy do ambiente do pipeline
+      ansible.builtin.set_fact:
+        jenkins_proxy_url: >-
+          {{ HTTPS_PROXY | default(HTTP_PROXY | default('', true), true) | trim }}
+        jenkins_proxy_skip: >-
+          {{ (NO_PROXY | default('', true)).split(',')
+             | map('trim') | reject('equalto', '')
+             | map('regex_replace', '^\.', '*.')
+             | join('\n') }}
+
+    - name: Jenkins | Proxy | Decidir se há o que persistir
+      ansible.builtin.set_fact:
+        # Só persiste o que é utilizável: uma URL com host. Um valor vazio (ou
+        # sem `http://`) não vira proxy.xml — o Jenkins sairia direto, que é o
+        # comportamento certo quando não há proxy.
+        jenkins_proxy_host: "{{ jenkins_proxy_url | urlsplit('hostname') | default('', true) }}"
+        jenkins_proxy_port: "{{ jenkins_proxy_url | urlsplit('port') | default(8080, true) }}"
+      when: jenkins_proxy_url | length > 0
+
+    - name: Jenkins | Proxy | Gravar o proxy.xml
+      copy:
+        # O $JENKINS_HOME do container é este diretório (veja o `volumes:` do
+        # compose). Gravado ANTES do `docker compose up -d` porque o Jenkins lê
+        # o proxy.xml na subida.
+        dest: "{{ JENKINS_HOME }}/home/proxy.xml"
+        owner: "root"
+        group: "root"
+        mode: 0644
+        content: |
+          <?xml version='1.1' encoding='UTF-8'?>
+          <proxy>
+            <name>{{ jenkins_proxy_host }}</name>
+            <port>{{ jenkins_proxy_port }}</port>
+            <noProxyHost>{{ jenkins_proxy_skip }}</noProxyHost>
+          </proxy>
+      when: jenkins_proxy_host | default('', true) | length > 0
+
+    - name: Jenkins | Proxy | Sem proxy definido, o Jenkins sai direto
+      ansible.builtin.debug:
+        msg: >-
+          Nenhum HTTP_PROXY/HTTPS_PROXY no ambiente — o proxy.xml não foi criado.
+      when: jenkins_proxy_host | default('', true) | length == 0
 
     - name: Jenkins | Copy CA root cert
       copy:
@@ -410,6 +467,71 @@
         ) == 0
       retries: 100
       delay: 10
+
+    # ------------------------------------------------------------------
+    # A espera acima passa mesmo quando NADA foi instalado: se o update center
+    # está inalcançável a fila fica vazia, nenhum job casa com
+    # `Pending|Installing|Downloading` e o `until` é satisfeito na primeira
+    # consulta. O `installPlugins` também responde 200 nesse cenário.
+    #
+    # Sem esta conferência o deploy seguia por ~100 tasks e só morria adiante,
+    # num 404 do /credentials/... — a rota que o plugin `credentials`, nunca
+    # instalado, publicaria. O erro aparecia a 10 minutos e a dezenas de tasks de
+    # distância da causa.
+    # ------------------------------------------------------------------
+    - name: Jenkins | Conferir os plugins instalados
+      uri:
+        url: "https://{{ jenkins_host }}/pluginManager/api/json?depth=1"
+        method: GET
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) }}"
+        return_content: yes
+        status_code: 200
+      register: jenkins_installed
+      # Folga curta só para o `dynamicLoad`, que registra o plugin alguns
+      # segundos depois do download. Esperar pela INSTALAÇÃO é da task anterior.
+      until: >-
+        jenkins_plugins | reject('in',
+          jenkins_installed.json.plugins | default([])
+            | selectattr('active') | map(attribute='shortName') | list
+        ) | list | length == 0
+      retries: 6
+      delay: 10
+      # A falha vira a mensagem do assert abaixo, que diz o que faltou e por quê.
+      ignore_errors: yes
+
+    - name: Jenkins | Apurar o que faltou
+      ansible.builtin.set_fact:
+        # `unique` porque a lista de pedidos tem repetidos (workflow-aggregator e
+        # matrix-auth aparecem duas vezes) — sem isso a mensagem diria "faltam 21
+        # dos 19".
+        jenkins_plugins_missing: >-
+          {{ jenkins_plugins | reject('in',
+               jenkins_installed.json.plugins | default([])
+                 | selectattr('active') | map(attribute='shortName') | list
+             ) | unique | list }}
+        jenkins_plugins_total: "{{ jenkins_installed.json.plugins | default([]) | length }}"
+
+    - name: Jenkins | Falhar quando faltar plugin
+      ansible.builtin.assert:
+        that:
+          - jenkins_plugins_missing | length == 0
+        success_msg: >-
+          Os {{ jenkins_plugins | unique | list | length }} plugins pedidos estão ativos
+          ({{ jenkins_plugins_total }} instalados no total).
+        fail_msg: >-
+          O Jenkins subiu SEM {{ jenkins_plugins_missing | length }} dos
+          {{ jenkins_plugins | unique | list | length }} plugins pedidos
+          ({{ jenkins_plugins_total }} instalados no total):
+          {{ jenkins_plugins_missing | join(', ') }}.
+          Quase sempre é o update center inalcançável — confira se o
+          https://updates.jenkins.io e os mirrors de download passam pelo proxy
+          de saída, e se o proxy.xml foi gravado no $JENKINS_HOME (o Jenkins é
+          Java e NÃO lê HTTP_PROXY do ambiente). Seguir daqui só adiaria o erro:
+          sem o plugin `credentials` o deploy morre adiante, num 404 do
+          /credentials/....
 
     - name: Jenkins | Set Jenkins URL
       uri:
