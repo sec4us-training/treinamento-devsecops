@@ -30,7 +30,7 @@ machines:
       # mínimo não sobrevive ao primeiro pipeline da turma.
       vm_num_cpus: 4
       vm_memory_mb: 16384
-      vm_disk_gb: 120
+      vm_disk_gb: 80
       datastore: "datastore2"
 
 # --------------------------------------------------------------- variáveis
