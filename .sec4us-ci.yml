@@ -103,6 +103,19 @@ variables:
   # (prepare_azure_devops.yml), reaproveitando a que já está no registry.
   SKIP_BUILD: "false"
 
+# O proxy acima é do LABORATÓRIO: quem precisa dele são as máquinas, que vivem
+# numa rede sem rota direta para a internet. O orquestrador não — ele tem a saída
+# dele (é assim que clona este repositório, antes de o pipeline começar) e pode
+# nem ter rota até o 192.168.30.1.
+#
+# Como `variables:` vale para TODO passo, inclusive os `runs-on: localhost`, os
+# jobs do orquestrador limpam essas variáveis com este bloco. Valor vazio é
+# tratado como "sem proxy" por curl, git e pelas libs de HTTP do Go e do python.
+.sem-proxy: &sem-proxy
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  NO_PROXY: ""
+
 # --------------------------------------------------------------- pipeline
 stages:
   - network
@@ -443,6 +456,9 @@ proxy-win:
 debug-no-log:
   stage: prepare
   runs-on: localhost
+  # Job do orquestrador: sem o proxy do laboratório.
+  variables:
+    <<: *sem-proxy
   force: true
   steps:
     - name: Desligar o no_log dos playbooks
@@ -486,6 +502,10 @@ debug-no-log:
 full-history:
   stage: prepare
   runs-on: localhost
+  # Job do orquestrador: o `git fetch` sai pela rede dele, a mesma que clonou
+  # este repositório antes de o pipeline começar.
+  variables:
+    <<: *sem-proxy
   force: true
   steps:
     - name: Aprofundar o clone do laboratório
