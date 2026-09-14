@@ -487,6 +487,18 @@
         - project_exists
         - item.path_with_namespace == gitlab_project_group + '/' + gitlab_project_name
 
+    - name: GitLab | Sortear a FLAG do projeto
+      ansible.builtin.set_fact:
+        bank_flag: >-
+          {{ 'FLAG{' ~ lookup('community.general.random_string',
+                              length=40, upper=True, lower=True,
+                              numbers=True, special=False) ~ '}' }}
+      no_log: true
+
+    - name: Creds | GitLab Flag
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::GitLab Project Var::{{ bank_flag }}"
+
     - name: GitLab | Create CI/CD variable (project level)
       ansible.builtin.uri:
         url: "https://{{ gitlab_host }}/api/{{ gitlab_api_version }}/projects/{{ gitlab_project_id }}/variables"
@@ -495,12 +507,17 @@
           PRIVATE-TOKEN: "{{ gitlab_admin_token }}"
         body_format: form-urlencoded
         body:
-          key: "FAKE_SECRET_TOKEN"
-          value: "inY9Ts0MThkdDptliBlLsDhxg39AYsMric4tUSvmHT"
+          key: "FLAG"
+          value: "{{ bank_flag }}"
           variable_type: "env_var"
           environment_scope: "*"
           protected: "true"
-          masked: "true"
+          # `masked` não pode ficar ligado com este valor: o GitLab só aceita
+          # mascarar variável cujo conteúdo esteja no alfabeto Base64 mais
+          # `@ : . ~`, e as chaves do `FLAG{...}` estão fora dele. Ligado, a API
+          # devolve 400 — que o `until` abaixo trata como sucesso — e a variável
+          # simplesmente não é criada.
+          masked: "false"
           raw: "true"
           description: "DevSecOps fake secret token"
         status_code: [201, 400, 409, 502, 503, 504]
