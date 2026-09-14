@@ -11,16 +11,19 @@
 
 # --------------------------------------------------------------- máquina
 # Um único servidor Ubuntu com tudo dentro (é o desenho do laboratório: o Nginx
-# faz reverse-proxy por Host header para os serviços locais). Sem `ip:`: o
-# endereço é o que o motor de deploy entregou, e os hostnames
+# faz reverse-proxy por Host header para os serviços locais). Os hostnames
 # `*.labs.sec4us.com.br` são resolvidos pelo /etc/hosts do próprio servidor
 # (setup_base.yml) ou, para o aluno, pelo Squid da porta 48284.
+#
+# `ip:` é o endereço FIXO que a máquina assume no stage `network` — o
+# orquestrador acompanha essa troca e passa a falar com ela no endereço novo.
 machines:
   - id: devsecops
     name: "DEVSECOPS - servidor do laboratório"
     group: "Lab DevSecOps"
     # Nome do template de deploy Linux em produção — ajuste se o seu tiver outro.
     template: "Ubuntu 22.04"
+    ip: "192.168.30.249"
     params:
       # O README pede 8 GB / 60 GB como MÍNIMO. Com GitLab + Jenkins + SonarQube
       # + JFrog + Vault + registry + os containers dos runners no mesmo host, o
@@ -28,6 +31,7 @@ machines:
       vm_num_cpus: 4
       vm_memory_mb: 16384
       vm_disk_gb: 120
+      datastore: "datastore2"
 
 # --------------------------------------------------------------- variáveis
 # O `vars.yml` deste repositório é VERSIONADO e continua sendo a fonte da verdade
@@ -38,6 +42,18 @@ machines:
 # ambiente do passo (e também extra-vars, que vencem o `vars.yml` — por isso não
 # repita aqui nenhum nome que já exista lá).
 variables:
+  # Portgroup do laboratório: a placa é movida para cá no stage `network`,
+  # ANTES do IP fixo — o endereço 192.168.30.x só existe nesta rede.
+  REDE_LAB: "Rede_30"
+  # Endereçamento fixo aplicado no guest. O STATIC_IP tem que ser o mesmo
+  # `ip:` declarado em machines: é por ele que o orquestrador reencontra a
+  # máquina depois da troca.
+  STATIC_IP: "192.168.30.249"
+  NETMASK_CIDR: "23"
+  GATEWAY: "192.168.30.1"
+  UPSTREAM_DNS_1: "8.8.8.8"
+  UPSTREAM_DNS_2: "8.8.4.4"
+
   # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
   # os copia para /u01/lab_files. Vazio = o passo não copia nada.
   ADITIONAL_FILES_PATH: ""
@@ -47,12 +63,93 @@ variables:
 
 # --------------------------------------------------------------- pipeline
 stages:
+  - network
   - prepare
   - base
   - platform
   - ci
   - projects
   - finish
+
+# --- rede + IP fixo (antes de qualquer outra coisa) --------------------------
+# A VM nasce na rede do template, com o endereço que o provisionamento deu. Este
+# stage a coloca onde ela vai viver, e nada mais roda antes disso: o
+# `setup_base.yml` escreve o /etc/hosts, gera certificado e sobe o Nginx com o
+# endereço da máquina — refazer a rede depois seria refazer tudo.
+#
+# A ordem dos dois passos importa:
+# 1. a placa é movida para o portgroup do laboratório — direto no vSphere, sem
+#    falar com o guest; sem isso a VM não seria alcançável no IP fixo, que só
+#    existe nessa rede. A placa é desconectada e reconectada logo depois, para o
+#    guest renovar o DHCP na rede nova;
+# 2. o IP fixo é aplicado no guest (a sessão SSH cai no meio, é esperado).
+#
+# Entre um passo e outro o orquestrador reconcilia o endereço: procura no IP
+# fixo, no endereço atual e, se a máquina sumiu dos dois, pergunta ao VMware
+# Tools qual endereço ela pegou.
+#
+# ATENÇÃO: o passo do IP fixo roda DENTRO da máquina, então a $REDE_LAB precisa
+# ter DHCP — é por ele que o orquestrador reencontra a VM entre os dois passos.
+lab-network:
+  stage: network
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Mover a placa para a rede do laboratório
+      network: "$REDE_LAB"
+
+    # Só o .sec4us-ci.yml: o endereçamento fixo é do laboratório, não do
+    # servidor DevSecOps — nenhum playbook do repositório mexe em rede, e o
+    # deploy.sh nem sabe que esta rede existe.
+    - name: Aplicar o IP fixo
+      script:
+        - |
+          # A placa do laboratório: a do default route enquanto o DHCP da rede
+          # nova ainda vale; sem rota, a primeira placa física da máquina.
+          IFACE="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+          if [ -z "$IFACE" ]; then
+            IFACE="$(ip -o link show \
+              | awk -F': ' '$2 !~ /^(lo|docker|veth|br-|virbr)/ {print $2; exit}')"
+          fi
+          [ -n "$IFACE" ] || { echo "Nenhuma interface de rede encontrada."; exit 1; }
+          echo "Interface ${IFACE} -> ${STATIC_IP}/${NETMASK_CIDR} (gw ${GATEWAY})"
+        - |
+          # O cloud-init reescreve o netplan a cada boot; sem desligar isso o IP
+          # fixo some no primeiro reboot da máquina.
+          sudo tee /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg >/dev/null <<'CLOUDCFG'
+          network: {config: disabled}
+          CLOUDCFG
+        - |
+          # O `99-` vence o `50-cloud-init.yaml` na mesclagem do netplan, chave a
+          # chave — inclusive o `dhcp4` que o instalador deixou ligado.
+          IFACE="$(ip -o -4 route show default | awk '{print $5}' | head -1)"
+          [ -n "$IFACE" ] || IFACE="$(ip -o link show \
+            | awk -F': ' '$2 !~ /^(lo|docker|veth|br-|virbr)/ {print $2; exit}')"
+          sudo tee /etc/netplan/99-lab-static.yaml >/dev/null <<NETPLAN
+          network:
+            version: 2
+            ethernets:
+              ${IFACE}:
+                dhcp4: false
+                dhcp6: false
+                addresses: [${STATIC_IP}/${NETMASK_CIDR}]
+                routes:
+                  - to: default
+                    via: ${GATEWAY}
+                nameservers:
+                  addresses: [${UPSTREAM_DNS_1}, ${UPSTREAM_DNS_2}]
+          NETPLAN
+          sudo chmod 600 /etc/netplan/99-lab-static.yaml
+          # Valida antes de aplicar: um erro de sintaxe aqui derruba o passo, e
+          # não a máquina.
+          sudo netplan generate
+        - |
+          # O `netplan apply` troca o endereço e derruba a sessão SSH no meio.
+          # Destacado e com um respiro, o passo devolve OK antes de a conexão
+          # cair — e o orquestrador procura a máquina no IP fixo logo depois.
+          sudo nohup bash -c 'sleep 5; netplan apply' >/dev/null 2>&1 </dev/null &
+          echo "netplan apply agendado; a sessão SSH vai cair, é esperado."
 
 # --- preparo -----------------------------------------------------------------
 # O que o deploy.sh faz ANTES de chamar o primeiro playbook: o par de chaves SSH
@@ -65,6 +162,7 @@ stages:
 # acesso nenhum. Daí o artefato.
 prepare:
   stage: prepare
+  needs: lab-network
   runs-on: devsecops
   force: true
   retries: 2
@@ -175,18 +273,18 @@ jenkins:
       ansible:
         name: install_jenkins_runner.yml
 
-azure-devops:
-  stage: ci
-  needs: jenkins
-  runs-on: devsecops
-  retries: 2
-  delay: 30
-  steps:
-    # Constrói e publica a imagem do agente no registry local — o passo mais
-    # longo do stage. Com SKIP_BUILD=true ele reaproveita a imagem já publicada.
-    - name: Preparar o runner do Azure DevOps
-      ansible:
-        name: prepare_azure_devops.yml
+#azure-devops:
+#  stage: ci
+#  needs: jenkins
+#  runs-on: devsecops
+#  retries: 2
+#  delay: 30
+#  steps:
+#    # Constrói e publica a imagem do agente no registry local — o passo mais
+#    # longo do stage. Com SKIP_BUILD=true ele reaproveita a imagem já publicada.
+#    - name: Preparar o runner do Azure DevOps
+#      ansible:
+#        name: prepare_azure_devops.yml
 
 jenkins-sonar:
   stage: ci

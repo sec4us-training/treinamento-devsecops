@@ -45,6 +45,7 @@ do agente do Azure DevOps são os trechos mais demorados).
 
 | Stage | Jobs | O que faz |
 |-------|------|-----------|
+| `network` | `lab-network` | move a placa para o portgroup do laboratório e aplica o IP fixo |
 | `prepare` | `prepare` | recupera/gera o par de chaves do laboratório, autoriza a pública no root e ajusta o `pip_extra_args` |
 | `base` | `base` | `setup_base`, `setup_tools`, `setup_docker`, `setup_powershell` |
 | `platform` | `vault` → `gitlab` → `jfrog` → `sonar` | os serviços da plataforma, na ordem do `deploy.sh` |
@@ -55,6 +56,44 @@ do agente do Azure DevOps são os trechos mais demorados).
 A ordem do `platform`/`ci` **importa**: o GitLab, o JFrog, o SonarQube e o
 Jenkins guardam no Vault as credenciais que sorteiam, e os playbooks seguintes as
 leem de lá (`vault_token_*.yml`). Vault fora do ar = o resto não sobe.
+
+## A rede e a troca de IP
+
+A VM nasce na rede do template, com o endereço que o provisionamento deu, e só
+depois vai para a rede do laboratório com o IP fixo. É o **primeiro** stage, e
+nada roda antes dele: o `setup_base.yml` escreve o `/etc/hosts`, gera o
+certificado e sobe o Nginx com o endereço da máquina — refazer a rede depois
+seria refazer tudo.
+
+São dois passos, nesta ordem:
+
+1. **`network: "$REDE_LAB"`** — move a placa para o portgroup do laboratório
+   (`Rede_30`). É feito direto no vSphere, sem falar com o guest, e precisa vir
+   primeiro: o `192.168.30.249` só existe nessa rede. A placa é desconectada e
+   reconectada logo depois, para o guest renovar o DHCP na rede nova.
+2. **o IP fixo**, num `script:` de bash. Ele desliga a configuração de rede do
+   cloud-init (senão o IP some no primeiro reboot), escreve
+   `/etc/netplan/99-lab-static.yaml` — o `99-` vence o `50-cloud-init.yaml` na
+   mesclagem, chave a chave —, valida com `netplan generate` e agenda o
+   `netplan apply` destacado. O `apply` derruba a sessão SSH: o passo devolve OK
+   antes disso, e o orquestrador reencontra a máquina no IP fixo.
+
+Entre um passo e outro o orquestrador procura a máquina: primeiro no IP fixo,
+depois no endereço atual e, se ela sumiu dos dois, pergunta ao VMware Tools qual
+endereço ela pegou.
+
+> **A `$REDE_LAB` precisa ter DHCP.** O passo do IP fixo roda *dentro* da
+> máquina, e é pelo endereço do DHCP que o orquestrador a reencontra entre a
+> troca de placa e a aplicação do endereço estático.
+
+Rede e endereçamento ficam em `variables:` (`REDE_LAB`, `STATIC_IP`,
+`NETMASK_CIDR`, `GATEWAY`, `UPSTREAM_DNS_1`, `UPSTREAM_DNS_2`). O `STATIC_IP`
+tem que ser o mesmo `ip:` declarado em `machines:` — é por ele que o motor
+reencontra a VM.
+
+Nenhum playbook do repositório mexe em rede: isso é do laboratório, não do
+servidor DevSecOps, e o `deploy.sh` nem sabe que essa rede existe. Por isso o
+passo é um `script:` dentro do próprio `.sec4us-ci.yml`.
 
 ## O par de chaves do laboratório
 
@@ -97,6 +136,9 @@ playbooks as leem, com `lookup('env', ...)`):
 
 | Variável | Para quê |
 |----------|----------|
+| `REDE_LAB` | portgroup do laboratório, para onde a placa é movida no stage `network` |
+| `STATIC_IP` / `NETMASK_CIDR` / `GATEWAY` | endereçamento fixo aplicado no guest; o `STATIC_IP` tem que bater com o `ip:` de `machines:` |
+| `UPSTREAM_DNS_1` / `UPSTREAM_DNS_2` | resolvedores do servidor depois da troca de rede |
 | `ADITIONAL_FILES_PATH` | diretório **no orquestrador** com os arquivos extras da turma; o `sync_lab_files.yml` os copia para `/u01/lab_files`. Vazio = não copia nada |
 | `SKIP_BUILD` | `true` pula o build/push da imagem do agente do Azure DevOps e reaproveita a que já está no registry |
 
