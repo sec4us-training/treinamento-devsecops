@@ -468,6 +468,49 @@ debug-no-log:
           restante=$(grep -rcE "$alvo" --include='*.yml' . | awk -F: '{s+=$2} END {print s+0}')
           echo "Sobraram ${restante} ocorrências de no_log: true."
 
+# --- história completa do repositório ----------------------------------------
+# O orquestrador clona o repositório com `--depth 1`. Isso quebra o Web01 de
+# duas maneiras:
+#
+#   1. o `install_web01.yml` copia o `.git` da raiz do laboratório para o
+#      /u01/www/data e dá `git push` dele no GitLab — e o servidor recusa um
+#      clone raso: "! [remote rejected] main -> main (shallow update not
+#      allowed)";
+#   2. mesmo que o push passasse, o `.git` servido teria UM commit. E esse
+#      `.git` é o exercício: o README.txt do Web01 manda o aluno procurar no
+#      histórico os arquivos que "sumiram" e os segredos de commits antigos.
+#      Com um commit só não há o que achar.
+#
+# Roda no ORQUESTRADOR, que é onde o clone vive, e com `force: true` porque a
+# sincronização refaz o clone raso a cada execução.
+full-history:
+  stage: prepare
+  runs-on: localhost
+  force: true
+  steps:
+    - name: Aprofundar o clone do laboratório
+      script:
+        - |
+          if [ ! -d .git ]; then
+            echo "Sem .git na raiz do laboratório — nada a aprofundar."
+            exit 0
+          fi
+
+          if [ ! -f .git/shallow ]; then
+            echo "O clone já tem a história completa ($(git rev-list --count HEAD) commits)."
+            exit 0
+          fi
+
+          echo "Clone raso: $(git rev-list --count HEAD) commit. Buscando o resto..."
+          if ! git fetch --unshallow; then
+            echo "FALHA ao aprofundar o clone." >&2
+            echo "Sem isso o Web01 não sobe: o GitLab recusa push de clone raso" >&2
+            echo "(\"shallow update not allowed\"), e o .git servido — que É o" >&2
+            echo "exercício — ficaria com um commit só, sem histórico para o aluno." >&2
+            exit 1
+          fi
+          echo "História completa: $(git rev-list --count HEAD) commits."
+
 # --- preparo -----------------------------------------------------------------
 # O que o deploy.sh faz ANTES de chamar o primeiro playbook: o par de chaves SSH
 # do laboratório e o ajuste do pip_extra_args. Como aqui o controller é o
