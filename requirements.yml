@@ -1,0 +1,15 @@
+---
+# Collections do ansible instaladas pelo orquestrador antes do pipeline
+# (services/lab_engine: um `requirements.yml` na raiz vira `ansible-galaxy
+# collection install`). É o subconjunto do que o deploy.sh instala à mão e que
+# os playbooks deste repositório realmente usam:
+#
+#   community.general -> locale_gen (setup_base) e o lookup random_string
+#   ansible.posix     -> sysctl (setup_base) e authorized_key (setup_base,
+#                        ci_prepare)
+#
+# Não afeta o deploy.sh: lá as collections continuam vindo dos
+# `ansible-galaxy collection install` do próprio script.
+collections:
+  - name: community.general
+  - name: ansible.posix

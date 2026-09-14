@@ -1,0 +1,34 @@
+---
+# Credenciais de acesso ao servidor, publicadas para o vm_manager.
+#
+# O marcador `__SEC4US_CRED__::<nome>::<valor>` no output de um passo vira uma
+# credencial da máquina na tela do laboratório. As senhas e tokens dos SERVIÇOS
+# já saem dos próprios playbooks de instalação (install_vault, install_gitlab,
+# install_jfrog, install_sonar, install_jenkins); o que falta é o acesso ao
+# servidor em si — o bloco que o deploy.sh imprime no final.
+#
+# A chave SSH privada não entra aqui: o marcador lê uma linha só, e ela está no
+# Vault (secret/devops-server/ssh), que é onde a prática espera encontrá-la.
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+
+    - name: Creds | Usuário do servidor
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Servidor Usuario::{{ local_username }}"
+
+    - name: Creds | Senha do servidor
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Servidor Senha::{{ default_password }}"
+
+    # Forward proxy do laboratório: dispensa o aluno de editar o arquivo hosts
+    # para resolver os *.labs.sec4us.com.br (veja o README.md).
+    - name: Creds | Squid (forward proxy)
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Squid Proxy::{{ ansible_host | default(inventory_hostname) }}:48284"

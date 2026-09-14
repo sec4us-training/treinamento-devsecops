@@ -68,3 +68,13 @@ test.yml
 
 # Claude Code
 .claude
+
+# Gerados em tempo de execucao pelo deploy.sh e pelo pipeline (.sec4us-ci.yml)
+ssh_key.pem
+ssh_key.pem.pub
+ssh_key.pub
+vars_old.yml
+
+# Gerados pelo orquestrador do vm_manager na raiz do laboratorio
+config.yml
+ansible.cfg

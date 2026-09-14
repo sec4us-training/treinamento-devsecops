@@ -1,0 +1,281 @@
+# Sec4US — Laboratório de DevSecOps
+#
+# Orquestração no padrão do vm_manager (Deploy > Laboratórios). A VM é criada
+# pelo motor de deploy a partir de um template; este arquivo descreve qual é ela
+# e o pipeline que instala o ecossistema (Vault, GitLab, JFrog, SonarQube,
+# Jenkins, Web01 e os repositórios da turma).
+#
+# O fluxo antigo (`deploy.sh` rodando dentro do próprio servidor) continua no
+# repositório e segue funcionando: aqui as entradas do `DEPLOY_STEPS` viraram
+# passos, na MESMA ordem, chamando os MESMOS playbooks. Veja README_CI.md.
+
+# --------------------------------------------------------------- máquina
+# Um único servidor Ubuntu com tudo dentro (é o desenho do laboratório: o Nginx
+# faz reverse-proxy por Host header para os serviços locais). Sem `ip:`: o
+# endereço é o que o motor de deploy entregou, e os hostnames
+# `*.labs.sec4us.com.br` são resolvidos pelo /etc/hosts do próprio servidor
+# (setup_base.yml) ou, para o aluno, pelo Squid da porta 48284.
+machines:
+  - id: devsecops
+    name: "DEVSECOPS - servidor do laboratório"
+    group: "Lab DevSecOps"
+    # Nome do template de deploy Linux em produção — ajuste se o seu tiver outro.
+    template: "Ubuntu 22.04"
+    params:
+      # O README pede 8 GB / 60 GB como MÍNIMO. Com GitLab + Jenkins + SonarQube
+      # + JFrog + Vault + registry + os containers dos runners no mesmo host, o
+      # mínimo não sobrevive ao primeiro pipeline da turma.
+      vm_num_cpus: 4
+      vm_memory_mb: 16384
+      vm_disk_gb: 120
+
+# --------------------------------------------------------------- variáveis
+# O `vars.yml` deste repositório é VERSIONADO e continua sendo a fonte da verdade
+# dos dois fluxos (hostnames, usuário local, senha padrão). Nada aqui o duplica.
+#
+# O que fica aqui é só o que é do AMBIENTE de execução: as variáveis que os
+# playbooks leem com `lookup('env', ...)` no controller. Elas viram variáveis de
+# ambiente do passo (e também extra-vars, que vencem o `vars.yml` — por isso não
+# repita aqui nenhum nome que já exista lá).
+variables:
+  # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
+  # os copia para /u01/lab_files. Vazio = o passo não copia nada.
+  ADITIONAL_FILES_PATH: ""
+  # "true" pula o build/push da imagem do runner do Azure DevOps
+  # (prepare_azure_devops.yml), reaproveitando a que já está no registry.
+  SKIP_BUILD: "false"
+
+# --------------------------------------------------------------- pipeline
+stages:
+  - prepare
+  - base
+  - platform
+  - ci
+  - projects
+  - finish
+
+# --- preparo -----------------------------------------------------------------
+# O que o deploy.sh faz ANTES de chamar o primeiro playbook: o par de chaves SSH
+# do laboratório e o ajuste do pip_extra_args. Como aqui o controller é o
+# orquestrador (e não o próprio servidor), isso mora num playbook.
+#
+# O par de chaves precisa SOBREVIVER à sincronização e à retomada: o
+# setup_base.yml autoriza a pública e o install_vault.yml guarda a privada no
+# Vault — gerar um par novo num passo seguinte deixaria o segredo do Vault sem
+# acesso nenhum. Daí o artefato.
+prepare:
+  stage: prepare
+  runs-on: devsecops
+  force: true
+  retries: 2
+  delay: 15
+  steps:
+    # `current: true` (padrão) = só o estado ATUAL. Destruir a máquina ou
+    # recriá-la do zero abre uma geração nova e vazia; `ignore_error` deixa o
+    # passo seguir quando ainda não há chave guardada.
+    - name: Recuperar o par de chaves do laboratório
+      download-artifact:
+        name: ssh-key
+        current: true
+        ignore_error: true
+
+    - name: Gerar as chaves, autorizar o root e ajustar o pip_extra_args
+      ansible:
+        name: ci_prepare.yml
+
+    - name: Guardar o par de chaves
+      upload-artifact:
+        name: ssh-key
+        paths:
+          - ssh_key.pem
+          - ssh_key.pub
+
+# --- base do sistema ---------------------------------------------------------
+base:
+  stage: base
+  needs: prepare
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Setup base do sistema
+      ansible:
+        name: setup_base.yml
+    - name: Setup de ferramentas Linux
+      ansible:
+        name: setup_tools.yml
+    - name: Setup do Docker
+      ansible:
+        name: setup_docker.yml
+    - name: Instalar o PowerShell 7 e o módulo Az
+      ansible:
+        name: setup_powershell.yml
+
+# --- plataforma --------------------------------------------------------------
+# Um job por serviço: a tela do laboratório mostra o pipeline como o do GitLab,
+# então cada caixa é um serviço com o log dele. A ordem é a do deploy.sh e
+# importa — o GitLab, o JFrog e o SonarQube guardam as credenciais que geram no
+# Vault, que precisa estar de pé e unsealed antes.
+vault:
+  stage: platform
+  needs: base
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o HashiCorp Vault
+      ansible:
+        name: install_vault.yml
+
+gitlab:
+  stage: platform
+  needs: vault
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o GitLab
+      ansible:
+        name: install_gitlab.yml
+
+jfrog:
+  stage: platform
+  needs: gitlab
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o JFrog Artifactory
+      ansible:
+        name: install_jfrog.yml
+
+sonar:
+  stage: platform
+  needs: jfrog
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o SonarQube
+      ansible:
+        name: install_sonar.yml
+
+# --- CI/CD -------------------------------------------------------------------
+jenkins:
+  stage: ci
+  needs: sonar
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o Jenkins
+      ansible:
+        name: install_jenkins.yml
+    - name: Instalar o Jenkins Runner
+      ansible:
+        name: install_jenkins_runner.yml
+
+azure-devops:
+  stage: ci
+  needs: jenkins
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    # Constrói e publica a imagem do agente no registry local — o passo mais
+    # longo do stage. Com SKIP_BUILD=true ele reaproveita a imagem já publicada.
+    - name: Preparar o runner do Azure DevOps
+      ansible:
+        name: prepare_azure_devops.yml
+
+jenkins-sonar:
+  stage: ci
+  needs: azure-devops
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Integração Jenkins <-> SonarQube
+      ansible:
+        name: install_jenkins_sonar.yml
+
+web01:
+  stage: ci
+  needs: jenkins-sonar
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Instalar o Web01
+      ansible:
+        name: install_web01.yml
+
+gitlab-runner:
+  stage: ci
+  needs: web01
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    - name: Configurar os runners do GitLab
+      ansible:
+        name: gitlab_runner.yml
+
+# --- repositórios da turma ---------------------------------------------------
+# `retries: 1` (uma tentativa só): estes playbooks SORTEIAM senhas e tokens e os
+# publicam no Vault/GitLab. Repetir por causa de um timeout de rede geraria um
+# segredo novo por cima do que já foi entregue ao aluno.
+projects:
+  stage: projects
+  needs: gitlab-runner
+  runs-on: devsecops
+  retries: 1
+  steps:
+    - name: Repositório GitLab (Helvio)
+      ansible:
+        name: gitlab_helvio.yml
+    - name: Repositório GitLab (Bank)
+      ansible:
+        name: gitlab_bank.yml
+    - name: Repositório GitLab (Sonar Helper)
+      ansible:
+        name: gitlab_sonar_helper.yml
+    - name: Repositório GitLab (WebAPI)
+      ansible:
+        name: gitlab_webapi.yml
+    - name: Repositório GitLab (DevSecOps)
+      ansible:
+        name: gitlab_devsecops.yml
+    - name: Repositório GitLab (IntelParser)
+      ansible:
+        name: gitlab_intelparser.yml
+
+# --- arquivos extras da turma ------------------------------------------------
+lab-files:
+  stage: finish
+  needs: projects
+  runs-on: devsecops
+  retries: 2
+  delay: 15
+  # Sem ADITIONAL_FILES_PATH o playbook não copia nada; com ele, os arquivos
+  # mudam entre turmas — então o passo roda em toda execução.
+  force: true
+  steps:
+    - name: Sincronizar os arquivos extras para /u01/lab_files
+      ansible:
+        name: sync_lab_files.yml
+
+# --- credenciais do laboratório pronto ---------------------------------------
+# As senhas e tokens dos serviços já são publicados pelos próprios playbooks de
+# instalação (`__SEC4US_CRED__::...` no install_vault, install_gitlab,
+# install_jfrog, install_sonar e install_jenkins). O que falta é o acesso ao
+# servidor em si — o que o deploy.sh imprime no final.
+credentials:
+  stage: finish
+  needs: lab-files
+  runs-on: devsecops
+  force: true
+  steps:
+    - name: Publicar as credenciais de acesso ao servidor
+      ansible:
+        name: ci_creds.yml

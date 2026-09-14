@@ -1,0 +1,113 @@
+---
+# Preparo do laboratório para o pipeline do vm_manager (.sec4us-ci.yml).
+#
+# É o que o deploy.sh faz ANTES de chamar o primeiro playbook. Lá o controller e
+# o alvo são a mesma máquina, então tudo cabia no shell script; aqui o controller
+# é o orquestrador, e o que é dele ganha `delegate_to: localhost`.
+#
+#   1. o par de chaves SSH do laboratório (`ssh_key.pem` / `ssh_key.pub`), que o
+#      setup_base.yml autoriza para o {{ local_username }} e o install_vault.yml
+#      guarda no Vault (secret/devops-server/ssh);
+#   2. a mesma chave pública no authorized_keys do root — é ela que transforma o
+#      segredo do Vault em acesso root, que é o ponto da prática;
+#   3. o `pip_extra_args` do vars.yml conforme o python da imagem (PEP 668).
+#
+# O vars.yml NÃO é regerado: neste repositório ele é versionado e continua sendo
+# a fonte da verdade dos dois fluxos. Só a linha do `pip_extra_args` é reescrita,
+# exatamente como o deploy.sh faz no clone dele.
+#
+# Nada aqui é usado pelo deploy.sh — ele já resolve os três pontos sozinho.
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+
+    # ------------------------------------------------------------------ chaves
+    - name: Prepare | Checar o par de chaves do laboratório
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ item }}"
+      delegate_to: localhost
+      become: false
+      register: ci_key_stat
+      loop:
+        - ssh_key.pem
+        - ssh_key.pub
+
+    - name: Prepare | Consolidar o estado das chaves
+      ansible.builtin.set_fact:
+        ci_key_priv_exists: "{{ ci_key_stat.results[0].stat.exists }}"
+        ci_key_pub_exists: "{{ ci_key_stat.results[1].stat.exists }}"
+
+    # Sem a privada não há o que reaproveitar: o par inteiro é novo. O passo do
+    # pipeline que roda antes deste recupera o artefato `ssh-key`, então chegar
+    # aqui sem ela significa laboratório novo (ou recriado do zero).
+    - name: Prepare | Gerar o par de chaves SSH do laboratório
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          rm -f ssh_key.pem ssh_key.pem.pub ssh_key.pub
+          ssh-keygen -b 2048 -t rsa -f ssh_key.pem -q -N ""
+          mv ssh_key.pem.pub ssh_key.pub
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      when: not ci_key_priv_exists
+
+    # A pública é derivável da privada: se só ela faltar, não vale jogar fora um
+    # par que o Vault e os authorized_keys já conhecem.
+    - name: Prepare | Reconstruir a chave pública a partir da privada
+      ansible.builtin.shell:
+        cmd: ssh-keygen -y -f ssh_key.pem > ssh_key.pub
+        chdir: "{{ playbook_dir }}"
+      delegate_to: localhost
+      become: false
+      when:
+        - ci_key_priv_exists
+        - not ci_key_pub_exists
+
+    - name: Prepare | Permissões da chave privada
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/ssh_key.pem"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+
+    - name: Prepare | Ler a chave pública
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/ssh_key.pub"
+      delegate_to: localhost
+      become: false
+      register: ci_key_pub_raw
+
+    # O deploy.sh faz `cat ssh_key.pub >> /root/.ssh/authorized_keys`. O
+    # {{ local_username }} é o setup_base.yml quem autoriza, no stage seguinte.
+    - name: Prepare | Autorizar a chave do laboratório para o root
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ ci_key_pub_raw.content | b64decode | trim }}"
+        state: present
+
+    # ---------------------------------------------------------- pip (PEP 668)
+    # Mesma decisão do deploy.sh, só que olhando o marcador em vez da versão: a
+    # partir do Ubuntu 23.04 / Debian 12 o python do sistema é gerenciado pela
+    # distro e o pip recusa instalar sem `--break-system-packages`. Nas imagens
+    # mais antigas o pip não conhece a opção, e passá-la quebra o setup_tools.
+    - name: Prepare | Checar se o python do servidor é gerenciado pela distro
+      ansible.builtin.shell:
+        cmd: ls /usr/lib/python3*/EXTERNALLY-MANAGED 2>/dev/null | head -1
+      changed_when: false
+      failed_when: false
+      register: ci_pep668
+
+    - name: Prepare | Ajustar o pip_extra_args do vars.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/vars.yml"
+        regexp: '^\s*pip_extra_args:'
+        line: 'pip_extra_args: "{{ "--break-system-packages" if ci_pep668.stdout | trim | length > 0 else "" }}"'
+      delegate_to: localhost
+      become: false
