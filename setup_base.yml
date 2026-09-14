@@ -340,7 +340,7 @@
 
     - include_tasks: 'user_details.yml'
 
-    - include_tasks: 'setup_python310.yml'
+    - include_tasks: 'setup_python.yml'
     - include_tasks: 'setup_nginx.yml'
 
     - include_tasks: 'project_clone.yml'

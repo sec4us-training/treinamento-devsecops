@@ -1,0 +1,103 @@
+# Python do sistema — incluído pelo setup_base.yml.
+#
+# Este arquivo se chamava setup_python310.yml e trazia o python3.10 do PPA
+# deadsnakes. O PPA saiu: nada no laboratório chama `python3.10`. Os playbooks
+# fixam `ansible_python_interpreter: /usr/bin/python3` e o `pip3` abaixo é o do
+# python da DISTRO — o 3.10 era instalado ao lado e ficava sem uso. No Ubuntu
+# 24.04, onde o python do sistema é o 3.12, aquilo virou dependência de o
+# deadsnakes publicar um pacote que ninguém usa, num passo sem `ignore_errors`:
+# um jeito de derrubar o setup_base inteiro de graça.
+#
+# Fica o python da distro, com um piso conferido logo depois do apt.
+- name: Python | Instalar o python do sistema
+  apt:
+    pkg:
+      - python3
+      - python3-pip
+      - python3-dev
+      - python3-venv
+      - python3-setuptools
+    state: latest
+    update_cache: yes
+
+# A versão é lida do interpretador de verdade, e não dos facts: os facts foram
+# coletados no início do play, antes deste apt.
+- name: Python | Ler a versão do /usr/bin/python3
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "import sys; print('%d.%d.%d' % sys.version_info[:3])"
+  register: python_version_cmd
+  changed_when: false
+
+- name: Python | Guardar a versão
+  ansible.builtin.set_fact:
+    python_version: "{{ python_version_cmd.stdout | trim }}"
+
+# Piso de 3.10. Falha aqui, antes dos pip installs, para o erro apontar a causa
+# — e não uma lib qualquer que não compila numa imagem velha demais.
+- name: Python | Exigir a versão mínima 3.10
+  ansible.builtin.assert:
+    that:
+      - python_version is version('3.10', '>=')
+    success_msg: "Python {{ python_version }} em /usr/bin/python3 (mínimo 3.10)."
+    fail_msg: >-
+      O /usr/bin/python3 desta imagem é o {{ python_version }}, abaixo do mínimo
+      3.10 do laboratório. Use uma imagem base mais nova (Ubuntu 22.04 já traz o
+      3.10) — instalar outro python ao lado não resolve, porque é o
+      /usr/bin/python3 que os playbooks e o pip3 usam.
+
+# Uma chamada de pip POR PACOTE, e não as doze de uma vez.
+#
+# Numa chamada só o pip é tudo-ou-nada: um pacote que não compila derruba a
+# instalação inteira, e o `ignore_errors` aqui embaixo engolia isso em silêncio
+# — o resultado era ficar sem NENHUMA das bibliotecas por causa de uma. Em
+# python moderno isso não é hipótese: o `pycrypto` está morto há anos e não
+# compila, e o `yara` do PyPI não é o `yara-python`.
+#
+# Separado, cada pacote falha sozinho e os outros entram. O passo seguinte diz
+# quais ficaram de fora, para a falha parar de ser invisível.
+- name: Python | Install Other packages
+  ignore_errors: yes
+  ansible.builtin.pip:
+    executable: pip3
+    extra_args: "{{pip_extra_args}}"
+    name: "{{ item }}"
+  loop:
+    - distorm3
+    - yara
+    - pycrypto
+    - pillow
+    - openpyxl
+    - ujson
+    - pytz
+    - ipython
+    - capstone
+    - cffi
+    - pyopenssl
+    - hvac
+  loop_control:
+    label: "{{ item }}"
+  register: python_libs
+
+- name: Python | Bibliotecas que não instalaram
+  ansible.builtin.debug:
+    msg: >-
+      Não instalaram:
+      {{ python_libs.results | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='item') | list | join(', ') }}.
+      O deploy segue — nenhuma delas é usada pelos playbooks do laboratório.
+  when: >-
+    python_libs.results | selectattr('failed', 'defined') | selectattr('failed')
+    | list | length > 0
+
+- name: Install pipx
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+    update_cache: yes
+
+- name: Ensure pipx path
+  ansible.builtin.command: pipx ensurepath
+  changed_when: false
