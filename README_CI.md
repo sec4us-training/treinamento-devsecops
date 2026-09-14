@@ -45,13 +45,19 @@ do agente do Azure DevOps são os trechos mais demorados).
 
 | Stage | Jobs | O que faz |
 |-------|------|-----------|
-| `network` | `lab-network` | move a placa para o portgroup do laboratório e aplica o IP fixo |
+| `network` | `lab-network`, `lab-network-win` | move a placa de cada máquina para o portgroup do laboratório e aplica o IP fixo |
+| `proxy` | `proxy-linux`, `proxy-win` | grava o proxy de saída, de forma persistente, nas duas máquinas e nos containers |
 | `prepare` | `prepare` | recupera/gera o par de chaves do laboratório, autoriza a pública no root e ajusta o `pip_extra_args` |
 | `base` | `base` | `setup_base`, `setup_tools`, `setup_docker`, `setup_powershell` |
 | `platform` | `vault` → `gitlab` → `jfrog` → `sonar` | os serviços da plataforma, na ordem do `deploy.sh` |
 | `ci` | `jenkins` → `azure-devops` → `jenkins-sonar` → `web01` → `gitlab-runner` | Jenkins e runners, a integração com o Sonar, o Web01 e os runners do GitLab |
+| `windows-ci` | `jenkins-runner-win` | o agente do Jenkins na VM Windows |
 | `projects` | `projects` | os seis repositórios da turma no GitLab |
 | `finish` | `lab-files`, `credentials` | arquivos extras da turma e as credenciais de acesso ao servidor |
+
+O pipeline é **sequencial**: os jobs rodam um por vez, na ordem do stage e, dentro
+do stage, na ordem do arquivo. O `needs` não paraleliza nada — ele decide o que é
+PULADO quando uma dependência falha.
 
 A ordem do `platform`/`ci` **importa**: o GitLab, o JFrog, o SonarQube e o
 Jenkins guardam no Vault as credenciais que sorteiam, e os playbooks seguintes as
@@ -94,6 +100,50 @@ reencontra a VM.
 Nenhum playbook do repositório mexe em rede: isso é do laboratório, não do
 servidor DevSecOps, e o `deploy.sh` nem sabe que essa rede existe. Por isso o
 passo é um `script:` dentro do próprio `.sec4us-ci.yml`.
+
+## O proxy de saída
+
+A `Rede_30` não tem rota direta para a internet: tudo que sai passa pelo proxy em
+`192.168.30.1:8080`. Isso chega às máquinas por dois caminhos, e os dois são
+necessários:
+
+1. **como ambiente do passo** — `variables:` vira o ambiente de todo passo, então
+   cada `script:` já nasce com `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` exportados
+   (no Linux como `export`, no Windows como environment da task `win_shell`);
+2. **gravado nas máquinas**, no stage `proxy`. É o que vale para os passos
+   `ansible:`: o ambiente deles fica no processo do `ansible-playbook`, que roda
+   no **orquestrador**, e não atravessa o SSH/WinRM até os módulos.
+
+O stage `proxy` vem antes do `prepare` porque o primeiro download do laboratório
+é o `apt update` do `setup_base.yml` — sem proxy o pipeline trava ali.
+
+No **servidor Linux** ele grava:
+
+| Onde | Para quê |
+|------|----------|
+| `/etc/environment` | o `pam_env` aplica em toda sessão SSH, inclusive as não interativas do ansible — é o que faz `apt`, `pip`, `get_url` e `uri` saírem pelo proxy sem o playbook saber |
+| `/etc/profile.d/99-lab-proxy.sh` | shells de login (o aluno no terminal, os Jenkinsfile) |
+| `/etc/apt/apt.conf.d/99-lab-proxy` | o apt quando roda pelo systemd, que não vê o ambiente do shell |
+| `/etc/systemd/system/docker.service.d/http-proxy.conf` | o **daemon** do docker, que é quem faz `docker pull` |
+| `/root/.docker/config.json` (`proxies.default`) | os **containers**: o docker injeta isso como build-arg no `docker build` e como ambiente no `docker run`/`compose up` |
+
+O `config.json` é **mesclado** com `python3`, não sobrescrito — o mesmo arquivo
+guarda o `auths` do `docker login` no registry do laboratório.
+
+No **runner Windows**:
+
+| Onde | Para quê |
+|------|----------|
+| variáveis de ambiente da máquina | toda sessão nova (WinRM, tarefa agendada, serviço); é o que `git` e `curl` leem |
+| `netsh winhttp set proxy` | os **serviços** — inclusive a tarefa agendada do agente, que roda como SYSTEM |
+| WinINET (`HKCU` e `HKU\.DEFAULT`) | o `Invoke-WebRequest` do PowerShell 5.1, que **não** lê as variáveis de ambiente |
+
+Os dois jobs rodam com `force: true`: a configuração é persistente, mas reaplicar
+é barato e garante o estado depois de um snapshot revertido.
+
+> O `NO_PROXY` não é detalhe: os `*.labs.sec4us.com.br` resolvem para `127.0.0.1`
+> no servidor e o registry local é um deles. Sem as exceções, o laboratório
+> tentaria falar consigo mesmo através do proxy.
 
 ## O par de chaves do laboratório
 
@@ -139,6 +189,8 @@ playbooks as leem, com `lookup('env', ...)`):
 | `REDE_LAB` | portgroup do laboratório, para onde a placa é movida no stage `network` |
 | `STATIC_IP` / `NETMASK_CIDR` / `GATEWAY` | endereçamento fixo aplicado no guest; o `STATIC_IP` tem que bater com o `ip:` de `machines:` |
 | `UPSTREAM_DNS_1` / `UPSTREAM_DNS_2` | resolvedores do servidor depois da troca de rede |
+| `HTTP_PROXY` / `HTTPS_PROXY` (e os minúsculos) | proxy de saída do laboratório; ver "O proxy de saída" |
+| `NO_PROXY` / `no_proxy` | o que NÃO passa pelo proxy: loopback, a sub-rede do lab e os `*.labs.sec4us.com.br` |
 | `ADITIONAL_FILES_PATH` | diretório **no orquestrador** com os arquivos extras da turma; o `sync_lab_files.yml` os copia para `/u01/lab_files`. Vazio = não copia nada |
 | `SKIP_BUILD` | `true` pula o build/push da imagem do agente do Azure DevOps e reaproveita a que já está no registry |
 

@@ -7,9 +7,15 @@
 #   community.general -> locale_gen (setup_base) e o lookup random_string
 #   ansible.posix     -> sysctl (setup_base) e authorized_key (setup_base,
 #                        ci_prepare)
+#   ansible.windows   -> win_shell, win_copy, win_get_url, win_hostname,
+#                        win_certificate_store... (windows/)
+#   community.windows -> win_timezone, win_hosts_entry, win_scheduled_task
+#                        (windows/)
 #
 # Não afeta o deploy.sh: lá as collections continuam vindo dos
 # `ansible-galaxy collection install` do próprio script.
 collections:
   - name: community.general
   - name: ansible.posix
+  - name: ansible.windows
+  - name: community.windows

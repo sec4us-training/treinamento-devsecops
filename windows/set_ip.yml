@@ -1,0 +1,69 @@
+---
+# Aplica o IP FIXO da máquina Windows (stage `network`, logo depois de a placa
+# ser movida para a $REDE_LAB).
+#
+# Trocar o endereço derruba a sessão WinRM em uso — por isso este é um passo
+# separado: ao terminar, o orquestrador confere quem responde no IP fixo e passa
+# a falar com a máquina lá (é o que `machines: ip:` habilita no .sec4us-ci.yml).
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars:
+    # `lab_static_ip` é host_var do inventário gerado pelo orquestrador: vem do
+    # `ip:` daquela máquina em `machines:`. Por isso este playbook serve para
+    # qualquer VM Windows do laboratório, sem parametrizar nada.
+    final_ip: "{{ lab_static_ip | default('', true) }}"
+    my_ip: "{{ ansible_host }}"
+    # As demais vêm de `variables:` do pipeline (chegam como extra-vars). Os
+    # defaults deixam o playbook rodável à mão, fora do orquestrador.
+    netmask_cidr: "{{ NETMASK_CIDR | default('23', true) }}"
+    gateway: "{{ GATEWAY | default('192.168.30.1', true) }}"
+    dns_1: "{{ UPSTREAM_DNS_1 | default('8.8.8.8', true) }}"
+    dns_2: "{{ UPSTREAM_DNS_2 | default('8.8.4.4', true) }}"
+
+  tasks:
+
+    - name: "IP fixo | A máquina precisa ter um IP declarado em machines:"
+      ansible.builtin.assert:
+        that:
+          - final_ip | length > 0
+        fail_msg: >-
+          Sem `ip:` em `machines:` para "{{ lab_machine_id | default(inventory_hostname) }}"
+          — é ele que vira o endereço fixo e o que o orquestrador procura depois.
+
+    - name: IP fixo | Já está no endereço final?
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} já responde em {{ final_ip }}"
+      when: my_ip == final_ip
+
+    - name: IP fixo | Aplicar o endereço estático
+      # A conexão cai no meio da execução: o erro aqui é esperado e o passo
+      # seguinte confirma o endereço novo.
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Continue"
+        $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+        if (-not $adapter) { $adapter = Get-NetAdapter | Select-Object -First 1 }
+        $alias = $adapter.InterfaceAlias
+
+        # Tira o endereço atual (DHCP) e fixa o do laboratório.
+        try { Set-NetIPInterface -InterfaceAlias $alias -Dhcp Disabled -ErrorAction SilentlyContinue } catch {}
+        try { Remove-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+        try { Remove-NetRoute -InterfaceAlias $alias -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+        New-NetIPAddress -InterfaceAlias $alias -IPAddress "{{ final_ip }}" -PrefixLength {{ netmask_cidr }} -DefaultGateway "{{ gateway }}"
+        Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses ("{{ dns_1 }}", "{{ dns_2 }}")
+      async: 30
+      poll: 0
+      ignore_errors: true
+      ignore_unreachable: true
+      when: my_ip != final_ip
+
+    - name: IP fixo | Esperar a máquina atender no endereço novo
+      ansible.builtin.wait_for:
+        host: "{{ final_ip }}"
+        port: 5986
+        timeout: 300
+        sleep: 5
+      delegate_to: localhost
+      when: my_ip != final_ip

@@ -1,0 +1,73 @@
+---
+# Baseline da máquina Windows (stage `network`, depois do IP fixo): nome, fuso e
+# o /etc/hosts do Windows apontando os serviços do laboratório para o servidor
+# DevSecOps.
+#
+# Aqui NÃO entra nada que dependa do servidor já instalado (a Root CA, por
+# exemplo, só existe depois do `setup_base.yml`): isso fica no
+# `windows/jenkins_runner.yml`, que roda lá no fim do pipeline.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars_files:
+    # O vars.yml da raiz é a fonte dos hostnames do laboratório, a mesma dos
+    # playbooks Linux. Caminho explícito porque este playbook vive em ./windows.
+    - "{{ playbook_dir }}/../vars.yml"
+
+  vars:
+    ansible_connect_timeout: 60
+    ansible_command_timeout: 60
+
+    win_hostname: "{{ lab_machine_id | default('runner2', true) }}"
+    win_timezone: "E. South America Standard Time"
+
+    # Endereço do servidor DevSecOps: o IP FIXO declarado em `machines:`, não o
+    # atual — este baseline pode rodar em paralelo com a troca de rede do
+    # servidor, quando o endereço dele ainda é o do provisionamento.
+    devsecops_ip: "{{ lab_machines.devsecops.static_ip | default(lab_machines.devsecops.ip, true) }}"
+
+    lab_hostnames:
+      - "{{ vault_host }}"
+      - "{{ gitlab_host }}"
+      - "{{ artifactory_host }}"
+      - "{{ jenkins_host }}"
+      - "{{ sonar_host }}"
+      - "{{ web01_host }}"
+      - "{{ registry_host }}"
+
+  tasks:
+
+    - name: Baseline | Aguardar a conexão
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 5
+        connect_timeout: 10
+
+    - name: Baseline | Fuso horário
+      community.windows.win_timezone:
+        timezone: "{{ win_timezone }}"
+
+    # O Windows resolve os *.labs.sec4us.com.br pelo hosts, como o aluno faria
+    # na máquina dele — não há DNS do laboratório, e o Squid não serve para o
+    # agente do Jenkins.
+    - name: Baseline | Apontar os serviços do laboratório para o DevSecOps
+      community.windows.win_hosts_entry:
+        canonical_name: "{{ item }}"
+        ip_address: "{{ devsecops_ip }}"
+        state: present
+      loop: "{{ lab_hostnames }}"
+
+    - name: Baseline | Nome da máquina
+      ansible.windows.win_hostname:
+        name: "{{ win_hostname }}"
+      register: win_rename
+
+    # Renomear só vale depois do boot. O endereço não muda aqui, então a
+    # reconexão é no mesmo IP fixo.
+    - name: Baseline | Reiniciar para aplicar o nome
+      ansible.windows.win_reboot:
+        reboot_timeout: 900
+        post_reboot_delay: 20
+      when: win_rename.reboot_required | default(false)

@@ -1,0 +1,364 @@
+---
+# Agente Jenkins numa máquina WINDOWS (stage `windows-ci`).
+#
+# É o irmão do `install_jenkins_runner.yml`, que roda o agente Linux num
+# container no próprio servidor. Aqui a máquina é outra VM, e o agente roda
+# direto no guest: JRE da Temurin + `agent.jar` inbound (WebSocket), sob uma
+# tarefa agendada que sobe no boot.
+#
+# As credenciais NÃO são lidas nesta máquina: o token do Vault e a senha do
+# admin do Jenkins vivem no servidor DevSecOps, e as tasks que precisam deles
+# usam `delegate_to: devsecops` — é o servidor quem resolve os
+# `*.labs.sec4us.com.br` pelo /etc/hosts e já confia na Root CA do laboratório.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars_files:
+    # Mesma fonte dos playbooks Linux (jenkins_host, vault_host, vault_home...).
+    # Caminho explícito porque este playbook vive em ./windows.
+    - "{{ playbook_dir }}/../vars.yml"
+
+  vars:
+    ansible_connect_timeout: 60
+    ansible_command_timeout: 120
+
+    runner_name: "JenkinsRunnerWin"
+    runner_description: "Jenkins Windows runner (inbound JNLP / WebSocket)"
+    runner_labels: "windows win"
+    runner_executors: 2
+    runner_task_name: "JenkinsAgent"
+
+    runner_home: 'C:\jenkins'
+    runner_work: 'C:\jenkins\work'
+    # O mesmo caminho com "/": no Groovy do Jenkins um "\j" seria escape inválido.
+    runner_work_java: "C:/jenkins/work"
+
+    runner_jenkins_url: "https://{{ jenkins_host }}/"
+
+    # JRE headless da Eclipse Temurin. A URL é a da API do Adoptium, que
+    # redireciona para o .zip da última GA — assim não há versão fixa para
+    # envelhecer no arquivo.
+    runner_jre_url: "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse"
+
+    # Root CA do laboratório, gerada pelo setup_base.yml no servidor DevSecOps.
+    lab_root_ca_path: "/etc/nginx/certs/root-ca.pem"
+
+  tasks:
+
+    # ------------------------------------------------------------------
+    # Credenciais — lidas NO SERVIDOR DevSecOps
+    # ------------------------------------------------------------------
+    - name: Runner | Ler o token do Vault no servidor DevSecOps
+      ansible.builtin.slurp:
+        src: "{{ vault_home }}/ansible_vault.key"
+      delegate_to: devsecops
+      become: true
+      register: vault_key_raw
+      no_log: true
+
+    - name: Runner | Definir o vault_token
+      ansible.builtin.set_fact:
+        vault_token: >-
+          {{ vault_key_raw.content | b64decode | regex_replace('[\r\n]+', '') | trim }}
+      no_log: true
+
+    - name: Runner | Ler a senha do admin do Jenkins no Vault
+      ansible.builtin.uri:
+        url: "https://{{ vault_host }}/v1/secret/jenkins/admin"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_token }}"
+        validate_certs: false
+        status_code: 200
+      delegate_to: devsecops
+      register: read_secret
+      no_log: true
+
+    - name: Runner | Definir a senha do admin do Jenkins
+      ansible.builtin.set_fact:
+        jenkins_admin_password: "{{ read_secret.json.data.password }}"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # Parar o agente ANTES de recriar o nó: registrar de novo sorteia um
+    # secret novo, e o processo antigo ficaria tentando com o antigo.
+    # ------------------------------------------------------------------
+    - name: Runner | Parar o agente, se já existir
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "SilentlyContinue"
+        Stop-ScheduledTask -TaskName "{{ runner_task_name }}"
+        Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" |
+          Where-Object { $_.CommandLine -like '*agent.jar*' } |
+          ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+        exit 0
+      changed_when: false
+
+    # ------------------------------------------------------------------
+    # Nó inbound no Jenkins + captura do secret (igual ao runner Linux)
+    # ------------------------------------------------------------------
+    - name: Runner | Jenkins crumb (CSRF)
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/crumbIssuer/api/json"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        return_content: yes
+        status_code: 200
+      delegate_to: devsecops
+      register: crumb_json
+      retries: 30
+      delay: 5
+      until: crumb_json.status == 200
+      no_log: true
+
+    - name: Runner | Montar o header do CSRF
+      ansible.builtin.set_fact:
+        jenkins_crumb_header: >-
+          {{
+            {
+              crumb_json.json.crumbRequestField:
+              crumb_json.json.crumb
+            }
+          }}
+      no_log: true
+
+    - name: Runner | Criar o nó "{{ runner_name }}" e capturar o secret
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/scriptText"
+        method: POST
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        headers: "{{ jenkins_crumb_header | combine({'Cookie': crumb_json.cookies_string}) | combine({'Content-Type': 'application/x-www-form-urlencoded'}) }}"
+        body_format: form-urlencoded
+        body:
+          script: |
+            import jenkins.model.Jenkins
+            import hudson.model.Node
+            import hudson.slaves.DumbSlave
+            import hudson.slaves.JNLPLauncher
+            import hudson.slaves.RetentionStrategy
+
+            def jenkins = Jenkins.instance
+
+            def name = "{{ runner_name }}"
+            def existing = jenkins.getNode(name)
+            if (existing != null) {
+                jenkins.removeNode(existing)
+            }
+
+            JNLPLauncher launcher = new JNLPLauncher(true)
+            try {
+                launcher.setWebSocket(true)
+            } catch (Throwable t) {
+                // versões antigas do Jenkins não têm setWebSocket
+            }
+
+            DumbSlave node = new DumbSlave(name, "{{ runner_work_java }}", launcher)
+            node.setNodeDescription("{{ runner_description }}")
+            node.setNumExecutors({{ runner_executors }})
+            node.setMode(Node.Mode.NORMAL)
+            node.setLabelString("{{ runner_labels }}")
+            node.setRetentionStrategy(new RetentionStrategy.Always())
+
+            jenkins.addNode(node)
+
+            def computer = jenkins.getComputer(name)
+            print computer.getJnlpMac()
+        return_content: true
+        status_code: 200
+        validate_certs: false
+      delegate_to: devsecops
+      register: jenkins_agent_create
+      no_log: true
+
+    - name: Runner | Definir o secret do agente
+      ansible.builtin.set_fact:
+        jenkins_runner_secret: "{{ jenkins_agent_create.content | trim }}"
+      no_log: true
+
+    - name: Runner | Validar o formato do secret
+      ansible.builtin.assert:
+        that:
+          - jenkins_runner_secret | length >= 32
+          - jenkins_runner_secret is match('^[a-f0-9]+$')
+        fail_msg: "Não veio um secret JNLP válido do Jenkins"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # Preparar a máquina Windows
+    # ------------------------------------------------------------------
+    - name: Runner | Criar os diretórios do agente
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ runner_home }}"
+        - "{{ runner_work }}"
+
+    - name: Runner | Ler a Root CA do laboratório no servidor DevSecOps
+      ansible.builtin.slurp:
+        src: "{{ lab_root_ca_path }}"
+      delegate_to: devsecops
+      become: true
+      register: lab_root_ca_raw
+
+    - name: Runner | Copiar a Root CA para a máquina
+      ansible.windows.win_copy:
+        content: "{{ lab_root_ca_raw.content | b64decode }}"
+        dest: '{{ runner_home }}\root-ca.crt'
+
+    # Sem isto o git, o curl e o próprio navegador da máquina recusam os
+    # certificados do laboratório (o agente em si usa
+    # -disableHttpsCertValidation, mas o resto do build não).
+    - name: Runner | Confiar na Root CA (LocalMachine\Root)
+      ansible.windows.win_certificate_store:
+        path: '{{ runner_home }}\root-ca.crt'
+        store_location: LocalMachine
+        store_name: Root
+        state: present
+
+    # ------------------------------------------------------------------
+    # JRE
+    # ------------------------------------------------------------------
+    - name: Runner | Checar se o JRE já está instalado
+      ansible.windows.win_stat:
+        path: '{{ runner_home }}\jre\bin\java.exe'
+      register: jre_stat
+
+    - name: Runner | Baixar e instalar o JRE da Temurin
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        $zip = '{{ runner_home }}\jre.zip'
+        $tmp = '{{ runner_home }}\jre_tmp'
+
+        Invoke-WebRequest -Uri '{{ runner_jre_url }}' -OutFile $zip -UseBasicParsing
+        if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+        Expand-Archive -Path $zip -DestinationPath $tmp -Force
+
+        # O .zip da Temurin traz uma única pasta raiz (jdk-21.x.y+z-jre).
+        $root = Get-ChildItem -Path $tmp -Directory | Select-Object -First 1
+        if (-not $root) { throw "O zip do JRE veio sem a pasta raiz esperada." }
+        if (Test-Path '{{ runner_home }}\jre') { Remove-Item -Recurse -Force '{{ runner_home }}\jre' }
+        Move-Item -Path $root.FullName -Destination '{{ runner_home }}\jre'
+
+        Remove-Item -Recurse -Force $tmp
+        Remove-Item -Force $zip
+      when: not jre_stat.stat.exists
+
+    # O keytool é o que faz o JAVA confiar na CA; o certificado do Windows não
+    # vale para ele.
+    - name: Runner | Importar a Root CA no cacerts do JRE
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Continue"
+        $keytool = '{{ runner_home }}\jre\bin\keytool.exe'
+        $store = '{{ runner_home }}\jre\lib\security\cacerts'
+        & $keytool -delete -alias sec4us-root-ca -keystore $store -storepass changeit 2>$null
+        & $keytool -importcert -noprompt -alias sec4us-root-ca `
+          -file '{{ runner_home }}\root-ca.crt' -keystore $store -storepass changeit
+        if ($LASTEXITCODE -ne 0) { throw "keytool falhou ao importar a Root CA" }
+
+    # ------------------------------------------------------------------
+    # Git: sem ele o agente não faz checkout de nada.
+    # ------------------------------------------------------------------
+    - name: Runner | Checar se o Git já está instalado
+      ansible.windows.win_stat:
+        path: 'C:\Program Files\Git\cmd\git.exe'
+      register: git_stat
+
+    - name: Runner | Instalar o Git for Windows
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        # A release mais recente, para não fixar uma versão que envelhece aqui.
+        $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing
+        $asset = $rel.assets | Where-Object { $_.name -like 'Git-*-64-bit.exe' } | Select-Object -First 1
+        if (-not $asset) { throw "Não achei o instalador 64-bit na última release do Git for Windows." }
+
+        $exe = '{{ runner_home }}\git-setup.exe'
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exe -UseBasicParsing
+        Start-Process -FilePath $exe -Wait -ArgumentList @(
+          '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES'
+        )
+        Remove-Item -Force $exe
+      when: not git_stat.stat.exists
+
+    # ------------------------------------------------------------------
+    # agent.jar + tarefa agendada
+    # ------------------------------------------------------------------
+    - name: Runner | Baixar o agent.jar do Jenkins
+      ansible.windows.win_get_url:
+        url: "https://{{ jenkins_host }}/jnlpJars/agent.jar"
+        dest: '{{ runner_home }}\agent.jar'
+        validate_certs: false
+        force: true
+
+    # Um .cmd em laço: se o agente cair (Jenkins reiniciando, rede piscando), ele
+    # volta sozinho sem depender da política de reinício da tarefa agendada.
+    - name: Runner | Escrever o run-agent.cmd
+      ansible.windows.win_copy:
+        dest: '{{ runner_home }}\run-agent.cmd'
+        content: |
+          @echo off
+          :loop
+          "{{ runner_home }}\jre\bin\java.exe" -jar "{{ runner_home }}\agent.jar" ^
+            -url "{{ runner_jenkins_url }}" ^
+            -secret {{ jenkins_runner_secret }} ^
+            -name "{{ runner_name }}" ^
+            -webSocket ^
+            -disableHttpsCertValidation ^
+            -workDir "{{ runner_work }}"
+          rem timeout precisa de console e a tarefa roda na sessao 0; o ping
+          rem no loopback funciona em qualquer contexto (arquivo so em ASCII).
+          ping -n 11 127.0.0.1 > NUL
+          goto loop
+      no_log: true
+
+    - name: Runner | Tarefa agendada do agente
+      community.windows.win_scheduled_task:
+        name: "{{ runner_task_name }}"
+        description: "{{ runner_description }}"
+        actions:
+          - path: C:\Windows\System32\cmd.exe
+            arguments: '/c "{{ runner_home }}\run-agent.cmd"'
+        triggers:
+          - type: boot
+        username: SYSTEM
+        run_level: highest
+        # PT0S = sem limite: o agente fica de pé enquanto a máquina estiver viva.
+        execution_time_limit: PT0S
+        disallow_start_if_on_batteries: false
+        stop_if_going_on_batteries: false
+        state: present
+        enabled: true
+
+    - name: Runner | Subir o agente
+      ansible.windows.win_shell: |
+        Start-ScheduledTask -TaskName "{{ runner_task_name }}"
+      changed_when: true
+
+    - name: Runner | Esperar o agente ficar online no Jenkins
+      ansible.builtin.uri:
+        url: "https://{{ jenkins_host }}/computer/{{ runner_name }}/api/json?tree=offline,temporarilyOffline"
+        method: GET
+        user: "admin"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        return_content: yes
+        status_code: 200
+      delegate_to: devsecops
+      register: agent_status
+      until: agent_status.json.offline == false
+      retries: 60
+      delay: 10
+      no_log: true

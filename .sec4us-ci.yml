@@ -21,7 +21,6 @@ machines:
   - id: devsecops
     name: "DEVSECOPS - servidor do laboratório"
     group: "Lab DevSecOps"
-    # Nome do template de deploy Linux em produção — ajuste se o seu tiver outro.
     template: "Ubuntu 24.04"
     ip: "192.168.30.249"
     params:
@@ -32,6 +31,17 @@ machines:
       vm_memory_mb: 16384
       vm_disk_gb: 80
       datastore: "datastore2"
+
+  - id: runner2
+    name: "DEVSECOPS - Windows Runner"
+    group: "Lab DevSecOps"
+    template: "Windows Server 2022"
+    ip: "192.168.30.248"
+    params:
+      vm_num_cpus: 4
+      vm_memory_mb: 6144
+      vm_disk_gb: 60
+      datastore: "datastore3"
 
 # --------------------------------------------------------------- variáveis
 # O `vars.yml` deste repositório é VERSIONADO e continua sendo a fonte da verdade
@@ -54,6 +64,27 @@ variables:
   UPSTREAM_DNS_1: "8.8.8.8"
   UPSTREAM_DNS_2: "8.8.4.4"
 
+  # Proxy de saída do laboratório. Como `variables:` vira o AMBIENTE de todo
+  # passo, cada `script:` nas máquinas já nasce com estas exportadas (no Linux
+  # como `export`, no Windows como environment da task) — é o item 1.
+  #
+  # Os passos `ansible:` são outra história: o ambiente fica no processo do
+  # ansible-playbook, que roda no ORQUESTRADOR, e não atravessa o SSH/WinRM até
+  # os módulos. Quem faz o proxy valer dentro das máquinas é o stage `proxy`,
+  # que o grava de forma persistente (item 2).
+  #
+  # Os dois nomes, maiúsculo e minúsculo: curl e wget leem os minúsculos, o
+  # docker e boa parte das libs leem os maiúsculos.
+  HTTP_PROXY: "http://192.168.30.1:8080"
+  HTTPS_PROXY: "http://192.168.30.1:8080"
+  http_proxy: "http://192.168.30.1:8080"
+  https_proxy: "http://192.168.30.1:8080"
+  # Sem isto tudo que é do próprio laboratório sairia pelo proxy: os
+  # `*.labs.sec4us.com.br` resolvem para 127.0.0.1 no servidor, e o registry
+  # local é um deles.
+  NO_PROXY: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
+  no_proxy: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
+
   # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
   # os copia para /u01/lab_files. Vazio = o passo não copia nada.
   ADITIONAL_FILES_PATH: ""
@@ -64,10 +95,12 @@ variables:
 # --------------------------------------------------------------- pipeline
 stages:
   - network
+  - proxy
   - prepare
   - base
   - platform
   - ci
+  - windows-ci
   - projects
   - finish
 
@@ -151,6 +184,229 @@ lab-network:
           sudo nohup bash -c 'sleep 5; netplan apply' >/dev/null 2>&1 </dev/null &
           echo "netplan apply agendado; a sessão SSH vai cair, é esperado."
 
+# Mesma coisa no runner Windows, com os playbooks de ./windows — lá o endereço
+# fixo vem do `ip:` da própria máquina (`lab_static_ip` no inventário), então o
+# set_ip.yml serve para qualquer VM Windows do laboratório.
+#
+# O pipeline é sequencial: este job roda logo depois do `lab-network`. O baseline
+# aponta os hostnames do laboratório para o IP FIXO do servidor, que é declarado
+# em `machines:` e portanto já é conhecido aqui.
+lab-network-win:
+  stage: network
+  runs-on: runner2
+  retries: 2
+  delay: 30
+  steps:
+    - name: Mover a placa para a rede do laboratório
+      network: "$REDE_LAB"
+    - name: Aplicar o IP fixo
+      ansible:
+        name: windows/set_ip.yml
+    - name: Baseline do Windows
+      ansible:
+        name: windows/baseline.yml
+
+# --- proxy persistente (antes de qualquer download) --------------------------
+# A Rede_30 não tem rota direta para a internet: tudo que sai passa pelo
+# $HTTP_PROXY. Este stage grava isso NAS MÁQUINAS, de forma persistente, e vem
+# antes do `prepare`/`base` porque o `setup_base.yml` é quem faz o primeiro
+# `apt update` — sem proxy ele trava ali.
+#
+# É o único lugar do pipeline que mexe nisso: os passos `ansible:` não levam o
+# ambiente do orquestrador até os módulos, então o proxy tem que já estar na
+# máquina quando o playbook chega.
+proxy-linux:
+  stage: proxy
+  needs: lab-network
+  runs-on: devsecops
+  # A configuração é persistente, mas reaplicar é barato e garante o estado
+  # depois de um snapshot revertido ou de uma máquina recriada.
+  force: true
+  retries: 2
+  delay: 15
+  steps:
+    - name: Proxy persistente no servidor e nos containers
+      script:
+        - |
+          echo "Proxy: ${HTTP_PROXY}"
+          echo "Exceções: ${NO_PROXY}"
+        - |
+          # /etc/environment: é o que o pam_env aplica em TODA sessão SSH,
+          # inclusive as não interativas do ansible — então os módulos (apt,
+          # pip, get_url, uri) saem pelo proxy sem o playbook saber disso.
+          # Reescrito sem as linhas de proxy antigas, preservando o resto.
+          TMP="$(mktemp)"
+          grep -viE '^[[:space:]]*(HTTP_PROXY|HTTPS_PROXY|FTP_PROXY|NO_PROXY|http_proxy|https_proxy|ftp_proxy|no_proxy)=' \
+            /etc/environment > "$TMP" || true
+          {
+            echo "HTTP_PROXY=\"${HTTP_PROXY}\""
+            echo "HTTPS_PROXY=\"${HTTPS_PROXY}\""
+            echo "NO_PROXY=\"${NO_PROXY}\""
+            echo "http_proxy=\"${http_proxy}\""
+            echo "https_proxy=\"${https_proxy}\""
+            echo "no_proxy=\"${no_proxy}\""
+          } >> "$TMP"
+          sudo install -m 0644 -o root -g root "$TMP" /etc/environment
+          rm -f "$TMP"
+        - |
+          # Shells de login (o aluno no terminal, o `su -`, os Jenkinsfile que
+          # rodam em shell de login).
+          sudo tee /etc/profile.d/99-lab-proxy.sh >/dev/null <<PROFILE
+          export HTTP_PROXY="${HTTP_PROXY}"
+          export HTTPS_PROXY="${HTTPS_PROXY}"
+          export NO_PROXY="${NO_PROXY}"
+          export http_proxy="${http_proxy}"
+          export https_proxy="${https_proxy}"
+          export no_proxy="${no_proxy}"
+          PROFILE
+          sudo chmod 0644 /etc/profile.d/99-lab-proxy.sh
+        - |
+          # O apt não lê as variáveis de ambiente quando roda pelo systemd
+          # (unattended-upgrades) nem em todas as invocações: precisa da sua
+          # própria configuração.
+          sudo tee /etc/apt/apt.conf.d/99-lab-proxy >/dev/null <<APTCONF
+          Acquire::http::Proxy "${HTTP_PROXY}";
+          Acquire::https::Proxy "${HTTPS_PROXY}";
+          APTCONF
+          sudo chmod 0644 /etc/apt/apt.conf.d/99-lab-proxy
+        - |
+          # O DAEMON do docker é quem faz `docker pull`: ele é um serviço do
+          # systemd e não enxerga o ambiente do shell. O drop-in vale mesmo
+          # escrito ANTES de o docker existir — ele nasce já com o proxy.
+          sudo mkdir -p /etc/systemd/system/docker.service.d
+          sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null <<DOCKERPROXY
+          [Service]
+          Environment="HTTP_PROXY=${HTTP_PROXY}"
+          Environment="HTTPS_PROXY=${HTTPS_PROXY}"
+          Environment="NO_PROXY=${NO_PROXY}"
+          DOCKERPROXY
+          sudo systemctl daemon-reload || true
+          # Só reinicia se o docker já estiver instalado (na primeira execução
+          # ainda não está, e o drop-in vale a partir do primeiro start).
+          if systemctl list-unit-files docker.service >/dev/null 2>&1 \
+             && systemctl is-active --quiet docker; then
+            sudo systemctl restart docker
+          fi
+        - |
+          # Os CONTAINERS: o `proxies.default` do config.json do CLI é o que o
+          # docker injeta como build-arg no `docker build` e como variável de
+          # ambiente no `docker run`/`compose up` — é assim que os runners do
+          # Jenkins e do Azure DevOps saem pelo proxy.
+          #
+          # Mesclado com python3 em vez de sobrescrito: este arquivo também
+          # guarda o `auths` do `docker login` no registry do laboratório.
+          sudo mkdir -p /root/.docker
+          sudo python3 - "${HTTP_PROXY}" "${HTTPS_PROXY}" "${NO_PROXY}" <<'DOCKERCFG'
+          import json, os, sys
+
+          path = '/root/.docker/config.json'
+          cfg = {}
+          if os.path.isfile(path):
+              try:
+                  with open(path) as fd:
+                      cfg = json.load(fd) or {}
+              except (ValueError, OSError):
+                  cfg = {}
+
+          cfg.setdefault('proxies', {})['default'] = {
+              'httpProxy': sys.argv[1],
+              'httpsProxy': sys.argv[2],
+              'noProxy': sys.argv[3],
+          }
+
+          with open(path, 'w') as fd:
+              json.dump(cfg, fd, indent=2)
+          os.chmod(path, 0o600)
+          print('proxies.default gravado em', path)
+          DOCKERCFG
+        - |
+          echo "--- /etc/environment ---"
+          grep -iE 'proxy' /etc/environment || true
+          echo "--- docker ---"
+          sudo cat /etc/systemd/system/docker.service.d/http-proxy.conf
+
+proxy-win:
+  stage: proxy
+  needs: lab-network-win
+  runs-on: runner2
+  force: true
+  retries: 2
+  delay: 15
+  steps:
+    # No Windows um `script:` vira `win_shell` com o ambiente do pipeline já
+    # aplicado — daí o $env:HTTP_PROXY abaixo já vir preenchido.
+    - name: Proxy persistente no runner Windows
+      script:
+        - |
+          $ErrorActionPreference = "Stop"
+          $proxy   = $env:HTTP_PROXY
+          $noProxy = $env:NO_PROXY
+          # netsh e o WinINET querem host:porta, sem o esquema.
+          $hostPort = $proxy -replace '^[a-zA-Z]+://', '' -replace '/$', ''
+          # A bypass-list do Windows é separada por ";" e usa "*" no curinga.
+          $bypass = (($noProxy -split ',' |
+                      ForEach-Object { $_.Trim() } |
+                      Where-Object { $_ } |
+                      ForEach-Object { if ($_.StartsWith('.')) { "*$_" } else { $_ } }) -join ';') + ';<local>'
+          Write-Output "Proxy: $hostPort"
+          Write-Output "Bypass: $bypass"
+        - |
+          $ErrorActionPreference = "Stop"
+          # 1) Variáveis de ambiente da MÁQUINA: valem para toda sessão nova
+          #    (WinRM, tarefa agendada, serviço) e são o que git, curl e as
+          #    ferramentas de linha de comando leem.
+          $vars = @{
+            'HTTP_PROXY'  = $env:HTTP_PROXY
+            'HTTPS_PROXY' = $env:HTTPS_PROXY
+            'NO_PROXY'    = $env:NO_PROXY
+            'http_proxy'  = $env:HTTP_PROXY
+            'https_proxy' = $env:HTTPS_PROXY
+            'no_proxy'    = $env:NO_PROXY
+          }
+          foreach ($k in $vars.Keys) {
+            [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Machine')
+          }
+          Write-Output "Variáveis de máquina gravadas: $($vars.Keys -join ', ')"
+        - |
+          $ErrorActionPreference = "Continue"
+          $hostPort = $env:HTTP_PROXY -replace '^[a-zA-Z]+://', '' -replace '/$', ''
+          $bypass = (($env:NO_PROXY -split ',' |
+                      ForEach-Object { $_.Trim() } |
+                      Where-Object { $_ } |
+                      ForEach-Object { if ($_.StartsWith('.')) { "*$_" } else { $_ } }) -join ';') + ';<local>'
+
+          # 2) WinHTTP: é o que os SERVIÇOS usam — inclusive a tarefa agendada
+          #    do agente do Jenkins, que roda como SYSTEM.
+          netsh winhttp set proxy proxy-server="$hostPort" bypass-list="$bypass"
+        - |
+          $ErrorActionPreference = "Stop"
+          $hostPort = $env:HTTP_PROXY -replace '^[a-zA-Z]+://', '' -replace '/$', ''
+          $bypass = (($env:NO_PROXY -split ',' |
+                      ForEach-Object { $_.Trim() } |
+                      Where-Object { $_ } |
+                      ForEach-Object { if ($_.StartsWith('.')) { "*$_" } else { $_ } }) -join ';') + ';<local>'
+
+          # 3) WinINET: é daqui que o Invoke-WebRequest do PowerShell 5.1 tira o
+          #    proxy (ele NÃO lê as variáveis de ambiente). Grava no usuário
+          #    atual — o que o WinRM usa — e no perfil .DEFAULT, que é o do
+          #    SYSTEM.
+          if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
+          }
+          $keys = @(
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+            'HKU:\.DEFAULT\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+          )
+          foreach ($key in $keys) {
+            if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+            Set-ItemProperty -Path $key -Name ProxyServer   -Value $hostPort -Type String
+            Set-ItemProperty -Path $key -Name ProxyOverride -Value $bypass   -Type String
+            Set-ItemProperty -Path $key -Name ProxyEnable   -Value 1         -Type DWord
+            Write-Output "WinINET configurado em $key"
+          }
+        - |
+          netsh winhttp show proxy
+
 # --- preparo -----------------------------------------------------------------
 # O que o deploy.sh faz ANTES de chamar o primeiro playbook: o par de chaves SSH
 # do laboratório e o ajuste do pip_extra_args. Como aqui o controller é o
@@ -162,7 +418,7 @@ lab-network:
 # acesso nenhum. Daí o artefato.
 prepare:
   stage: prepare
-  needs: lab-network
+  needs: proxy-linux
   runs-on: devsecops
   force: true
   retries: 2
@@ -325,6 +581,23 @@ gitlab-runner:
     - name: Configurar os runners do GitLab
       ansible:
         name: gitlab_runner.yml
+
+# --- Runners maquina windows ---------------------------------------------------
+jenkins-runner-win:
+  stage: windows-ci
+  # O Jenkins precisa estar de pé (gitlab-runner é o último job do stage `ci`) e
+  # a máquina precisa do proxy — ela baixa o JRE e o Git da internet.
+  needs:
+    - gitlab-runner
+    - proxy-win
+  runs-on: runner2
+  retries: 2
+  delay: 30
+  steps:
+    - name: Configurar o runner do Jenkins no windows
+      ansible:
+        name: windows/jenkins_runner.yml
+
 
 # --- repositórios da turma ---------------------------------------------------
 # `retries: 1` (uma tentativa só): estes playbooks SORTEIAM senhas e tokens e os
