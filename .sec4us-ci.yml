@@ -273,18 +273,25 @@ jenkins:
       ansible:
         name: install_jenkins_runner.yml
 
-#azure-devops:
-#  stage: ci
-#  needs: jenkins
-#  runs-on: devsecops
-#  retries: 2
-#  delay: 30
-#  steps:
-#    # Constrói e publica a imagem do agente no registry local — o passo mais
-#    # longo do stage. Com SKIP_BUILD=true ele reaproveita a imagem já publicada.
-#    - name: Preparar o runner do Azure DevOps
-#      ansible:
-#        name: prepare_azure_devops.yml
+azure-devops:
+  stage: ci
+  needs: jenkins
+  runs-on: devsecops
+  retries: 2
+  delay: 30
+  steps:
+    # Constrói e publica a imagem do agente no registry local — o passo mais
+    # longo do stage. Com SKIP_BUILD=true ele reaproveita a imagem já publicada.
+    #- name: Preparar o runner do Azure DevOps
+    #  ansible:
+    #    name: prepare_azure_devops.yml
+
+    # Desabilitado, então somente action dummy
+    # para habilitar a ação real descomentar as linhas acima
+    - name: Nada
+      script:
+        - hostname
+
 
 jenkins-sonar:
   stage: ci
