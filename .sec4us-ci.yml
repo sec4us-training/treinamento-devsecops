@@ -73,17 +73,20 @@ variables:
   # os módulos. Quem faz o proxy valer dentro das máquinas é o stage `proxy`,
   # que o grava de forma persistente (item 2).
   #
-  # Os dois nomes, maiúsculo e minúsculo: curl e wget leem os minúsculos, o
-  # docker e boa parte das libs leem os maiúsculos.
+  # SÓ os nomes em MAIÚSCULO aqui. O curl e o wget querem os minúsculos, mas
+  # eles não podem viver lado a lado nestas `variables:`: num passo Windows o
+  # ambiente vai para o exec_wrapper como JSON, e o PowerShell trata chave de
+  # dicionário sem diferenciar maiúscula de minúscula — `NO_PROXY` e `no_proxy`
+  # juntos derrubam o passo com "contains the duplicated keys".
+  #
+  # Os minúsculos são derivados destes no passo do Linux, e é lá (em
+  # /etc/environment e /etc/profile.d) que eles passam a existir de verdade.
   HTTP_PROXY: "http://192.168.30.1:8080"
   HTTPS_PROXY: "http://192.168.30.1:8080"
-  http_proxy: "http://192.168.30.1:8080"
-  https_proxy: "http://192.168.30.1:8080"
   # Sem isto tudo que é do próprio laboratório sairia pelo proxy: os
   # `*.labs.sec4us.com.br` resolvem para 127.0.0.1 no servidor, e o registry
   # local é um deles.
   NO_PROXY: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
-  no_proxy: "localhost,127.0.0.1,::1,192.168.30.0/23,192.168.30.249,192.168.30.248,labs.sec4us.com.br,.labs.sec4us.com.br,devsecops,runner2"
 
   # Diretório NO ORQUESTRADOR com os arquivos extras da turma; o sync_lab_files
   # os copia para /u01/lab_files. Vazio = o passo não copia nada.
@@ -228,6 +231,14 @@ proxy-linux:
     - name: Proxy persistente no servidor e nos containers
       script:
         - |
+          # Os minúsculos não vêm de `variables:` (ver o comentário lá em cima:
+          # lado a lado com os maiúsculos eles quebram os passos Windows). São
+          # derivados aqui, e é isto que vai para os arquivos abaixo — o curl
+          # lê `http_proxy` só em minúsculo, e o wget também.
+          http_proxy="${HTTP_PROXY}"
+          https_proxy="${HTTPS_PROXY}"
+          no_proxy="${NO_PROXY}"
+
           echo "Proxy: ${HTTP_PROXY}"
           echo "Exceções: ${NO_PROXY}"
         - |
@@ -355,13 +366,15 @@ proxy-win:
           # 1) Variáveis de ambiente da MÁQUINA: valem para toda sessão nova
           #    (WinRM, tarefa agendada, serviço) e são o que git, curl e as
           #    ferramentas de linha de comando leem.
+          #
+          #    Só em maiúsculo: no Windows o ambiente não diferencia maiúscula
+          #    de minúscula, então gravar `http_proxy` só sobrescreveria o
+          #    `HTTP_PROXY` — e um hashtable do PowerShell com os dois nem
+          #    compila ("Duplicate keys are not allowed in hash literals").
           $vars = @{
             'HTTP_PROXY'  = $env:HTTP_PROXY
             'HTTPS_PROXY' = $env:HTTPS_PROXY
             'NO_PROXY'    = $env:NO_PROXY
-            'http_proxy'  = $env:HTTP_PROXY
-            'https_proxy' = $env:HTTPS_PROXY
-            'no_proxy'    = $env:NO_PROXY
           }
           foreach ($k in $vars.Keys) {
             [Environment]::SetEnvironmentVariable($k, $vars[$k], 'Machine')
