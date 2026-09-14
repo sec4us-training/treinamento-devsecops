@@ -428,6 +428,46 @@ proxy-win:
         - |
           netsh winhttp show proxy
 
+# --- log verboso (depuração) -------------------------------------------------
+# Troca todo `no_log: true` por `no_log: false` nos .yml do repositório, para os
+# playbooks pararem de esconder a saída das tasks que lidam com segredo.
+#
+# Roda no ORQUESTRADOR (`runs-on: localhost`), que é onde o repositório fica, e
+# antes de tudo que tem `no_log` — o primeiro é o `install_vault.yml`, lá no
+# stage `platform`. Com `force: true` porque a sincronização repõe os arquivos
+# originais a cada execução.
+#
+# ATENÇÃO: isto joga no log da execução o token do Vault, o token e a senha de
+# root do GitLab, a senha do admin do Jenkins, os tokens do JFrog e do Sonar e a
+# flag do exercício. 
+debug-no-log:
+  stage: prepare
+  runs-on: localhost
+  force: true
+  steps:
+    - name: Desligar o no_log dos playbooks
+      script:
+        - |
+          # Só a linha inteira `no_log: true` (ou `yes`), com qualquer indentação
+          # — a âncora no fim evita pegar comentário que mencione o no_log.
+          alvo='^([[:space:]]*)no_log:[[:space:]]*(true|yes|True|Yes|TRUE|YES)[[:space:]]*$'
+
+          antes="$(grep -rlE "$alvo" --include='*.yml' . | sort)"
+          if [ -z "$antes" ]; then
+            echo "Nenhum no_log: true encontrado — nada a fazer."
+            exit 0
+          fi
+
+          echo "$antes" | while IFS= read -r arquivo; do
+            n=$(grep -cE "$alvo" "$arquivo")
+            echo "  ${arquivo} (${n})"
+            # Delimitador "/" e não "|": o próprio padrão tem "|" na alternância.
+            sed -i -E "s/${alvo}/\\1no_log: false/" "$arquivo"
+          done
+
+          restante=$(grep -rcE "$alvo" --include='*.yml' . | awk -F: '{s+=$2} END {print s+0}')
+          echo "Sobraram ${restante} ocorrências de no_log: true."
+
 # --- preparo -----------------------------------------------------------------
 # O que o deploy.sh faz ANTES de chamar o primeiro playbook: o par de chaves SSH
 # do laboratório e o ajuste do pip_extra_args. Como aqui o controller é o
