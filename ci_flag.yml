@@ -1,0 +1,68 @@
+---
+# Flag do exercício no servidor Linux: um arquivo em /root/flag.txt com um
+# `FLAG{...}` de 40 caracteres aleatórios, publicado como credencial do
+# laboratório (`__SEC4US_CRED__`) para a correção.
+#
+# A flag é sorteada UMA vez: se o arquivo já existe, o valor dele é reaproveitado
+# e só republicado. Sortear de novo a cada execução invalidaria o que já foi
+# entregue ao aluno — e o passo do pipeline roda com `force: true`, justamente
+# para republicar a credencial em toda execução.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não chama este playbook.
+- hosts: all
+  become: yes
+  gather_facts: false
+
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+    flag_path: /root/flag.txt
+    flag_length: 40
+
+  tasks:
+
+    - name: Flag | A flag já existe?
+      ansible.builtin.stat:
+        path: "{{ flag_path }}"
+      register: flag_stat
+
+    - name: Flag | Ler a flag já gravada
+      ansible.builtin.slurp:
+        src: "{{ flag_path }}"
+      register: flag_existing
+      when: flag_stat.stat.exists
+      no_log: true
+
+    - name: Flag | Sortear uma flag nova
+      ansible.builtin.set_fact:
+        flag_value: "{{ lookup('community.general.random_string',
+                               length=flag_length,
+                               upper=True, lower=True, numbers=True,
+                               special=False) }}"
+      when: not flag_stat.stat.exists
+      no_log: true
+
+    # O `if/else` do Jinja é preguiçoso: quando o arquivo existe, o ramo do
+    # `flag_value` (indefinido) nem é avaliado.
+    - name: Flag | Definir o FLAG_TEXT
+      ansible.builtin.set_fact:
+        FLAG_TEXT: >-
+          {{ (flag_existing.content | b64decode | trim)
+             if flag_stat.stat.exists
+             else ('FLAG{' ~ flag_value ~ '}') }}
+      no_log: true
+
+    - name: Flag | Gravar o /root/flag.txt
+      ansible.builtin.copy:
+        content: "{{ FLAG_TEXT }}"
+        dest: "{{ flag_path }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when: not flag_stat.stat.exists
+      no_log: true
+
+    # Sem `no_log`: é da LINHA DE LOG deste passo que o orquestrador extrai a
+    # credencial. Quem lê o log da execução vê a flag.
+    - name: Creds | Docker Server
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Docker Server Root Flag::{{ FLAG_TEXT }}"

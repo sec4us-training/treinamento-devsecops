@@ -789,3 +789,10 @@ credentials:
     - name: Publicar as credenciais de acesso ao servidor
       ansible:
         name: ci_creds.yml
+
+    # A flag em si é sorteada uma vez só: o playbook reaproveita a que já
+    # estiver no /root/flag.txt. O job roda com `force: true`, então a
+    # credencial é republicada em toda execução.
+    - name: Flag do exercício no servidor Linux
+      ansible:
+        name: ci_flag.yml
