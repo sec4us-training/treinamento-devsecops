@@ -41,7 +41,7 @@ machines:
       vm_num_cpus: 4
       vm_memory_mb: 6144
       vm_disk_gb: 60
-      datastore: "datastore3"
+      datastore: "datastore2"
 
 # --------------------------------------------------------------- variáveis
 # O `vars.yml` deste repositório é VERSIONADO e continua sendo a fonte da verdade
