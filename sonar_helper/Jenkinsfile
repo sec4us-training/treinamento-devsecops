@@ -74,7 +74,53 @@ pipeline {
                         credentialsId: 'sonar-admin',
                         usernameVariable: 'SONAR_ADMIN_USER',
                         passwordVariable: 'SONAR_ADMIN_PASSWORD')]) {
-                    sh 'mvn -B -ntp clean package'
+                    sh '''
+                        set -eu
+
+                        # ---- Maven/JVM ignoram HTTPS_PROXY: converter para -D props ----
+                        # E as -D sozinhas também não bastam: veja o
+                        # aether.connector.http.useSystemProperties mais abaixo.
+                        PROXY_URL="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+                        if [ -n "${PROXY_URL}" ]; then
+                            host=$(echo "${PROXY_URL}" | sed -E 's#^[a-z]+://([^:@/]+:[^@]+@)?([^:/]+).*#\\2#')
+                            port=$(echo "${PROXY_URL}" | sed -E 's#^.*:([0-9]+)/?$#\\1#')
+                            user=$(echo "${PROXY_URL}" | sed -nE 's#^[a-z]+://([^:@/]+):([^@]+)@.*#\\1#p')
+                            pass=$(echo "${PROXY_URL}" | sed -nE 's#^[a-z]+://([^:@/]+):([^@]+)@.*#\\2#p')
+
+                            PROXY_OPTS="-Dhttps.proxyHost=${host} -Dhttps.proxyPort=${port}"
+                            PROXY_OPTS="${PROXY_OPTS} -Dhttp.proxyHost=${host} -Dhttp.proxyPort=${port}"
+
+                            # Quem baixa artefato não é o HttpURLConnection da
+                            # JVM, e sim o Apache HttpClient do maven-resolver —
+                            # que é construído SEM useSystemProperties(). Sem a
+                            # flag abaixo ele ignora as -D acima, vai direto ao
+                            # repo.maven.apache.org e morre em "Network is
+                            # unreachable". (Alternativa: um settings.xml com
+                            # <proxy><protocol>https</protocol>, porque o
+                            # protocolo ali é o do REPOSITÓRIO, não o do proxy —
+                            # com "http" o Central, que é https, não casa.)
+                            PROXY_OPTS="${PROXY_OPTS} -Daether.connector.http.useSystemProperties=true"
+
+                            if [ -n "${user}" ]; then
+                                PROXY_OPTS="${PROXY_OPTS} -Dhttps.proxyUser=${user} -Dhttps.proxyPassword=${pass}"
+                                PROXY_OPTS="${PROXY_OPTS} -Dhttp.proxyUser=${user} -Dhttp.proxyPassword=${pass}"
+                                PROXY_OPTS="${PROXY_OPTS} -Djdk.http.auth.tunneling.disabledSchemes="
+                            fi
+
+                            NOPROXY="${NO_PROXY:-${no_proxy:-}}"
+                            if [ -n "${NOPROXY}" ]; then
+                                # NO_PROXY usa vírgula; a JVM usa pipe
+                                PROXY_OPTS="${PROXY_OPTS} -Dhttp.nonProxyHosts=$(echo "${NOPROXY}" | tr ',' '|')"
+                            fi
+
+                            export MAVEN_OPTS="${MAVEN_OPTS:-} ${PROXY_OPTS}"
+                            echo ">> Maven proxy: ${host}:${port}"
+                        else
+                            echo ">> No proxy configured"
+                        fi
+
+                        mvn -B -ntp clean package
+                    '''
                 }
             }
             post {
