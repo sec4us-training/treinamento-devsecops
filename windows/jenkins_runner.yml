@@ -144,12 +144,15 @@
             import hudson.slaves.RetentionStrategy
 
             def jenkins = Jenkins.instance
-
+            
             def name = "{{ runner_name }}"
             def existing = jenkins.getNode(name)
             if (existing != null) {
                 jenkins.removeNode(existing)
             }
+
+            jenkins.setMode(Node.Mode.EXCLUSIVE)
+            jenkins.save()
 
             JNLPLauncher launcher = new JNLPLauncher(true)
             try {
