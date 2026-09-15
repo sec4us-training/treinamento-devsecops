@@ -302,13 +302,16 @@
         ssh_key_file: .ssh/id_rsa
         force: no
 
-    - name: Base | Change SSH PasswordAuthentication to No
+    # Quem decide é o `ssh_password_auth` do vars.yml: `false` (padrão, e o que
+    # vale no pipeline) deixa só chave; o `deploy.sh` passa `true` como
+    # extra-var, porque lá o servidor é do próprio aluno.
+    - name: Base | Autenticação por senha no sshd_config
       lineinfile:
         path: /etc/ssh/sshd_config
         regexp: '^#?\s*PasswordAuthentication\s'
-        line: 'PasswordAuthentication no'
+        line: "PasswordAuthentication {{ 'yes' if ssh_password_auth | bool else 'no' }}"
 
-    # A linha acima, sozinha, NÃO desliga nada nesta imagem.
+    # A linha acima, sozinha, NÃO decide nada nesta imagem.
     #
     # O /etc/ssh/sshd_config traz `Include /etc/ssh/sshd_config.d/*.conf` já na
     # linha 12, e a imagem do Ubuntu vem com um `50-cloud-init.conf` dizendo
@@ -318,26 +321,27 @@
     # `PasswordAuthentication no` escrito no arquivo.
     #
     # A correção é entrar no mesmo diretório com um nome que ordene ANTES
-    # (00 < 50): aí o primeiro valor passa a ser este.
-    - name: Base | SSH só por chave (drop-in que vence o do cloud-init)
+    # (00 < 50): aí o primeiro valor passa a ser este. O drop-in é escrito nos
+    # DOIS casos, de propósito — assim o resultado é o que este playbook diz, e
+    # não o que a imagem trouxe.
+    - name: Base | Drop-in do SSH (vence o do cloud-init)
       copy:
         dest: /etc/ssh/sshd_config.d/00-lab-hardening.conf
         owner: root
         group: root
         mode: "0644"
         content: |
-          # Sec4US — autenticação SOMENTE por chave.
+          # Sec4US — este arquivo decide a autenticação do SSH.
           # Ordena antes do 50-cloud-init.conf de propósito: no sshd o primeiro
           # valor obtido é o que vale.
-          PasswordAuthentication no
-          # Sem isto o PAM continua pedindo senha pelo keyboard-interactive e o
-          # "sem senha" não vale nada.
-          KbdInteractiveAuthentication no
+          PasswordAuthentication {{ 'yes' if ssh_password_auth | bool else 'no' }}
+          # O par do de cima: sem isto o PAM continua pedindo senha pelo
+          # keyboard-interactive, e desligar só o PasswordAuthentication não
+          # vale nada.
+          KbdInteractiveAuthentication {{ 'yes' if ssh_password_auth | bool else 'no' }}
           PermitEmptyPasswords no
           PubkeyAuthentication yes
-          # root entra, mas só com a chave que o deploy instala no
-          # authorized_keys.
-          PermitRootLogin prohibit-password
+          PermitRootLogin {{ 'yes' if ssh_password_auth | bool else 'prohibit-password' }}
 
     # Antes de reiniciar: configuração inválida aqui deixaria o sshd fora do ar,
     # e o deploy inteiro fala com esta máquina por SSH.
@@ -358,17 +362,22 @@
       register: sshd_effective
       changed_when: false
 
-    - name: Base | Exigir autenticação só por chave
+    # O que foi pedido tem que ser o que ficou valendo — nos dois sentidos. Um
+    # `sshd -T` dizendo o contrário significa outro arquivo em
+    # /etc/ssh/sshd_config.d/ ordenando antes do nosso.
+    - name: Base | Conferir a autenticação do SSH
       ansible.builtin.assert:
         that:
-          - "'passwordauthentication no' in sshd_effective.stdout"
-          - "'kbdinteractiveauthentication no' in sshd_effective.stdout"
+          - "'passwordauthentication ' ~ ('yes' if ssh_password_auth | bool else 'no') in sshd_effective.stdout"
+          - "'kbdinteractiveauthentication ' ~ ('yes' if ssh_password_auth | bool else 'no') in sshd_effective.stdout"
           - "'permitemptypasswords no' in sshd_effective.stdout"
           - "'pubkeyauthentication yes' in sshd_effective.stdout"
-        success_msg: "SSH aceita apenas chave."
+        success_msg: >-
+          SSH {{ 'aceita senha e chave (ssh_password_auth=true)'
+                 if ssh_password_auth | bool else 'aceita apenas chave' }}.
         fail_msg: >-
-          O sshd ainda aceita senha depois do hardening. O que ele aplica:
-          {{ sshd_effective.stdout_lines | join(' | ') }}.
+          O sshd não ficou como o pedido (ssh_password_auth={{ ssh_password_auth }}).
+          O que ele aplica: {{ sshd_effective.stdout_lines | join(' | ') }}.
           Procure outro arquivo em /etc/ssh/sshd_config.d/ que ordene antes do
           00-lab-hardening.conf.
 

@@ -24,6 +24,18 @@ credentials_id: "gitlab-gitscm"
 # Info Gitlab
 GITLAB_HOME: /u01/gitlab
 
+# --- SSH ---------------------------------------------------------------------
+# Autenticação por senha no SSH do servidor.
+#
+# `false` (padrão, e o que vale no pipeline): só chave. A senha do `secops` está
+# versionada neste repositório, que é o mesmo histórico que o Web01 publica para
+# o exercício — deixá-la valendo entregaria o servidor a quem ainda não resolveu
+# nada.
+#
+# O `deploy.sh` passa `true` como extra-var: lá o servidor é do próprio aluno,
+# instalado por ele, e trancar o acesso por senha só atrapalharia.
+ssh_password_auth: false
+
 # --- Rede / firewall ---------------------------------------------------------
 # Porta do Squid. Fonte unica: o squid.conf (setup_base.yml) e a regra de
 # firewall (setup_firewall.yml) leem daqui.

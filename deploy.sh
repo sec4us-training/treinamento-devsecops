@@ -274,9 +274,14 @@ run_step() {
         "$pre_hook"
     fi
 
+    # ssh_password_auth=true: neste fluxo o servidor e do proprio aluno, que o
+    # instalou e precisa entrar nele. O padrao do vars.yml e `false` (so chave),
+    # que e o que vale no pipeline do laboratorio -- la a senha do secops esta
+    # versionada no repositorio publico que o Web01 expoe.
     ansible-playbook -i "$ip," \
         --private-key "$SSH_FILE" \
         --extra-vars ansible_user="$ansible_user" \
+        --extra-vars ssh_password_auth=true \
         --ssh-extra-args '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' \
         "$playbook"
 
@@ -290,17 +295,15 @@ run_step() {
     echo -e "${OK} ${G}OK${W}"
 }
 
-fix_password_auth() {
-    if [ "$(uname -s)" = "Darwin" ]; then
-        sed -i "" "s/PasswordAuthentication no/PasswordAuthentication yes/g" "setup_base.yml"
-    else
-        sed -i "s/PasswordAuthentication no/PasswordAuthentication yes/g" "setup_base.yml"
-    fi
-}
+# A `fix_password_auth` que existia aqui reescrevia o setup_base.yml com `sed`
+# para religar a autenticacao por senha. Nunca chegou a rodar: o quarto campo do
+# DEPLOY_STEPS e o pre_hook, e o do setup_base era o rotulo "Setup base do
+# sistema", que nao e nome de funcao -- o `declare -F` nunca casava. Quem decide
+# isso agora e o `ssh_password_auth`, passado como extra-var no run_step.
 
 # Cada entrada: "marker|playbook|label|pre_hook(opcional)"
 DEPLOY_STEPS=(
-    "setup_base|setup_base.yml|setup base|Setup base do sistema"
+    "setup_base|setup_base.yml|Setup base do sistema"
     "setup_tools|setup_tools.yml|Setup de ferramentas Linux"
     "setup_docker|setup_docker.yml|Setup do Docker"
     "setup_powershell|setup_powershell.yml|Instalar PowerShell 7 e modulo Az"
