@@ -127,6 +127,8 @@ stages:
   - windows-ci
   - projects
   - finish
+  - snapshot
+  - shutdown
 
 # --- rede + IP fixo (antes de qualquer outra coisa) --------------------------
 # A VM nasce na rede do template, com o endereço que o provisionamento deu. Este
@@ -811,7 +813,7 @@ credentials:
 # de empilhar um segundo com o mesmo nome. Uma execução nova do pipeline, sim,
 # tira outro.
 snapshot:
-  stage: finish
+  stage: snapshot
   needs: credentials
   runs-on:
     - devsecops
@@ -829,3 +831,17 @@ snapshot:
         # snapshot ser consistente. Exige os tools ativos nas duas VMs
         # (open-vm-tools no Ubuntu, VMware Tools no Windows).
         quiesce: true
+
+shutdown:
+  stage: shutdown
+  needs: snapshot
+  runs-on:
+    - devsecops
+    - runner2
+  steps:
+    - name: Desligar servidores
+      shutdown:
+        timeout: 300      # segundos que o guest tem para desligar sozinho
+        force: true       # padrao: corta a energia quando o prazo vence.
+                          # com `force: false` o passo FALHA em vez de forcar —
+                          # para quem prefere saber que a VM nao colaborou.

@@ -53,7 +53,9 @@ do agente do Azure DevOps são os trechos mais demorados).
 | `ci` | `jenkins` → `azure-devops` → `jenkins-sonar` → `web01` → `gitlab-runner` | Jenkins e runners, a integração com o Sonar, o Web01 e os runners do GitLab |
 | `windows-ci` | `jenkins-runner-win` | o agente do Jenkins na VM Windows |
 | `projects` | `projects` | os seis repositórios da turma no GitLab |
-| `finish` | `lab-files`, `credentials`, `snapshot` | arquivos extras da turma, a flag do servidor, o fechamento do acesso por senha e o snapshot das duas VMs |
+| `finish` | `lab-files`, `credentials` | arquivos extras da turma, a flag do servidor e o fechamento do acesso por senha |
+| `snapshot` | `snapshot` | snapshot das duas VMs, com o laboratório inteiro de pé |
+| `shutdown` | `shutdown` | desliga as duas VMs — o laboratório é entregue parado |
 
 O pipeline é **sequencial**: os jobs rodam um por vez, na ordem do stage e, dentro
 do stage, na ordem do arquivo. O `needs` não paraleliza nada — ele decide o que é
