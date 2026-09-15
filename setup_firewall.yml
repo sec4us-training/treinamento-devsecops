@@ -48,6 +48,30 @@
         group: root
         mode: "0755"
 
+    # A interface externa vem da ROTA DEFAULT da propria maquina, e nao do
+    # vars.yml: o nome muda com o hipervisor e com a imagem (ens192 no VMware,
+    # eth0, enp0s3...). Um nome errado aqui seria pior do que nenhum -- as
+    # regras da DOCKER-USER nao casariam com nada e o bloqueio falharia EM
+    # ABERTO, sem erro.
+    #
+    # `ext_if` passado como extra-var continua vencendo este set_fact (extra-vars
+    # tem a maior precedencia), para o caso de a VM ter mais de uma saida.
+    - name: Firewall | Descobrir a interface externa
+      ansible.builtin.set_fact:
+        ext_if: "{{ ansible_default_ipv4.interface | default('', true) }}"
+
+    - name: Firewall | A interface externa precisa ter sido encontrada
+      ansible.builtin.assert:
+        that:
+          - ext_if | length > 0
+          - ext_if in ansible_interfaces
+        success_msg: "Interface externa: {{ ext_if }}"
+        fail_msg: >-
+          Nao foi possivel determinar a interface externa pela rota default
+          (encontrei "{{ ext_if }}"; a maquina tem {{ ansible_interfaces | join(', ') }}).
+          Sem ela a regra da DOCKER-USER nao bloquearia nada. Passe a interface
+          correta como extra-var: -e ext_if=<nome>.
+
     # As bridges do Docker nao tem nome fixo (br-<hash>), entao a lista e
     # descoberta na hora em vez de ficar hardcoded.
     - name: Firewall | Descobrir as bridges do Docker

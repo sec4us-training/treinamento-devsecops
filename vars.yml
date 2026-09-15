@@ -29,8 +29,14 @@ GITLAB_HOME: /u01/gitlab
 # firewall (setup_firewall.yml) leem daqui.
 squid_port: 48284
 
-# Interface externa da VM (a que fala com a rede dos alunos).
-ext_if: ens192
+# A interface externa (a que fala com a rede dos alunos) NÃO fica fixada aqui: o
+# setup_firewall.yml a descobre pela rota default da própria máquina. O nome muda
+# com o hipervisor e com a imagem (ens192 no VMware, eth0, enp0s3...), e um nome
+# errado seria pior do que nenhum — as regras da DOCKER-USER não casariam com
+# nada e o bloqueio falharia EM ABERTO, sem erro nenhum.
+#
+# Para forçar uma interface (VM com mais de uma saída, por exemplo), passe
+# `ext_if` como extra-var: elas vencem o fato descoberto no playbook.
 
 # Portas TCP abertas para a rede externa. Todo o resto e bloqueado.
 fw_allowed_tcp:

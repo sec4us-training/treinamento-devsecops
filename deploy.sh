@@ -323,7 +323,14 @@ DEPLOY_STEPS=(
     "gitlab_webapi|gitlab_webapi.yml|Criar repositório GitLab (WebAPI)"
     "gitlab_devsecops|gitlab_devsecops.yml|Criar repositório GitLab (DevSecOps)"
     "gitlab_intelparser|gitlab_intelparser.yml|Criar repositório GitLab (IntelParser)"
-    
+
+    # Por último, e de propósito: o Docker reescreve as próprias chains toda vez
+    # que sobe um container, então o firewall só fica estável depois que o
+    # laboratório inteiro está de pé. Deixa exposto apenas 22, 80, 443 e a porta
+    # do Squid, e fecha a API do Docker (2375) — que é sem TLS/auth e daria root
+    # nesta máquina para quem alcançasse a porta.
+    "setup_firewall|setup_firewall.yml|Firewall do laboratório"
+
 )
 
 for entry in "${DEPLOY_STEPS[@]}"; do
