@@ -799,3 +799,33 @@ credentials:
     - name: Flag do exercício no servidor Linux
       ansible:
         name: ci_flag.yml
+
+# --- snapshot final ----------------------------------------------------------
+# Último job do pipeline: com o laboratório inteiro de pé, congela o estado das
+# duas VMs.
+#
+# `runs-on` com as duas máquinas faz o motor repetir o passo em cada uma, em
+# sequência — no log o nome do passo ganha o sufixo ` · <máquina>`.
+#
+# SEM `force`, de propósito: numa retomada o snapshot já tirado é pulado, em vez
+# de empilhar um segundo com o mesmo nome. Uma execução nova do pipeline, sim,
+# tira outro.
+snapshot:
+  stage: finish
+  needs: credentials
+  runs-on:
+    - devsecops
+    - runner2
+  retries: 2
+  delay: 30
+  steps:
+    - name: Snapshot do laboratório pronto
+      snapshot:
+        name: "Lab pronto"
+        description: "Laboratorio provisionado pelo pipeline - estado inicial da turma."
+        # Sem a RAM: o snapshot fica bem menor e voltar a ele dá um boot limpo.
+        memory: false
+        # Congela o sistema de arquivos pelo VMware Tools antes de tirar, para o
+        # snapshot ser consistente. Exige os tools ativos nas duas VMs
+        # (open-vm-tools no Ubuntu, VMware Tools no Windows).
+        quiesce: true
