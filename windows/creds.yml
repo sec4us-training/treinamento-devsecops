@@ -7,20 +7,22 @@
 # Administrator e ler o `C:\secrets\flag.txt` pula toda a cadeia que leva até o
 # agente do Jenkins.
 #
-# Este playbook troca essa senha por 40 caracteres aleatórios e NÃO publica o
-# valor em lugar nenhum. Não é uma credencial a entregar, é uma porta a fechar.
+# Este playbook troca essa senha por 40 caracteres aleatórios, sorteados A CADA
+# EXECUÇÃO, e publica a nova como credencial da máquina.
 #
-# A senha é sorteada A CADA EXECUÇÃO: nada depende dela, então não há o que
-# invalidar ao girá-la de novo.
+# O ganho não é esconder a senha — ela continua na mesma tela —, é que ela deixa
+# de ser a que o motor de deploy gerou. Diferente do `ci_creds.yml` do Linux, que
+# gira e DESCARTA, aqui o valor precisa sobreviver: no Windows não há o
+# equivalente à chave SSH do root, então sem publicá-la a única forma de voltar a
+# administrar a VM seria redefinir a senha pelo console do vSphere.
 #
-# ATENÇÃO — ESTE PLAYBOOK CORTA O PRÓPRIO CAMINHO DE VOLTA, e aqui não há rede
-# de segurança como no Linux, onde o root continua entrando pela chave SSH. Uma
-# vez trocada, a senha não existe mais em lugar nenhum: para voltar a
-# administrar esta VM é preciso redefinir a senha pelo console do vSphere.
+# A publicação é um `debug`, que roda no orquestrador e não precisa de conexão —
+# por isso ela pode vir depois da troca.
 #
-# Por isso ele é o ÚLTIMO job que fala com a máquina, e a troca é a ÚLTIMA task
-# do play. Os jobs seguintes não usam WinRM: `snapshot` é API do vSphere e
-# `shutdown` desliga pelo VMware Tools.
+# ATENÇÃO À ORDEM: depois da troca, a próxima conexão WinRM não abre mais com a
+# senha antiga. Por isso este é o ÚLTIMO job que fala com a máquina, e a troca é
+# a última task que usa WinRM. Os jobs seguintes não precisam dela: `snapshot` é
+# API do vSphere e `shutdown` desliga pelo VMware Tools.
 #
 # Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
 - hosts: all
@@ -66,3 +68,7 @@
         update_password: always
         password_never_expires: true
       no_log: true
+
+    - name: Creds | Publicar a senha nova
+      ansible.builtin.debug:
+        msg: "__SEC4US_CRED__::Runner Windows Administrator::{{ admin_password }}"

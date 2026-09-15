@@ -96,6 +96,29 @@
       register: flag_acl
       changed_when: "'removido' in flag_acl.stdout"
 
+    # A ACL é conferida aqui, e não depois, porque no fim do pipeline esta
+    # máquina se fecha: o `windows/firewall.yml` bloqueia a entrada fora da rede
+    # de administração e o `windows/creds.yml` gira a senha do Administrator.
+    # Enquanto o WinRM ainda abre, a garantia sai de graça; depois, custa uma
+    # sessão de vSphere.
+    - name: Flags | Conferir que a flag não é legível por usuário comum
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        (Get-Acl '{{ flag_path }}').Access |
+          ForEach-Object { "{0}={1}" -f $_.IdentityReference, $_.FileSystemRights }
+      register: flag_acl_check
+      changed_when: false
+
+    - name: Flags | A ACL da flag
+      ansible.builtin.assert:
+        that:
+          - flag_acl_check.stdout is not search('(?i)\\\\Users=')
+        success_msg: "ACL da flag: {{ flag_acl_check.stdout_lines | select | list }}"
+        fail_msg: >-
+          {{ flag_path }} continua legível por usuário comum
+          ({{ flag_acl_check.stdout_lines | select | list }}). Qualquer conta
+          local leria a flag sem resolver a cadeia até o agente do Jenkins.
+
     # Sem `no_log`: é da LINHA DE LOG deste passo que o orquestrador extrai a
     # credencial. Quem lê o log da execução vê a flag.
     - name: Flgs | Windows Flag
