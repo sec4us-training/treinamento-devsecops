@@ -23,3 +23,22 @@ credentials_id: "gitlab-gitscm"
 
 # Info Gitlab
 GITLAB_HOME: /u01/gitlab
+
+# --- Rede / firewall ---------------------------------------------------------
+# Porta do Squid. Fonte unica: o squid.conf (setup_base.yml) e a regra de
+# firewall (setup_firewall.yml) leem daqui.
+squid_port: 48284
+
+# Interface externa da VM (a que fala com a rede dos alunos).
+ext_if: ens192
+
+# Portas TCP abertas para a rede externa. Todo o resto e bloqueado.
+fw_allowed_tcp:
+  - 22
+  - 80
+  - 443
+  - "{{ squid_port }}"
+
+# Faixa das redes internas do Docker: a unica origem autorizada a falar com a
+# API do daemon (2375).
+docker_net_cidr: 172.16.0.0/12

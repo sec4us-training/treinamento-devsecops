@@ -290,7 +290,7 @@
                 - "{{registry_host}}:host-gateway"
 
               ports:
-                - "9252:9252"
+                - "127.0.0.1:9252:9252"
 
               environment:
                 - TZ=America/Sao_Paulo

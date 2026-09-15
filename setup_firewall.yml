@@ -1,0 +1,128 @@
+---
+# Firewall da VM do laboratorio.
+#
+# Externamente ficam abertas apenas 22, 80, 443 e a porta do Squid
+# ({{ squid_port }}, definida no vars.yml -- mesma fonte que o squid.conf).
+# Todo o resto e bloqueado, em dois pontos diferentes porque o Docker nao
+# passa pelo mesmo caminho do trafego normal:
+#
+#   INPUT        -> servicos do proprio host (sshd, nginx, squid, dockerd)
+#   DOCKER-USER  -> trafego DNAT para containers; o Docker insere suas regras
+#                   em FORWARD/DOCKER e ignora INPUT, entao portas publicadas
+#                   so se fecham aqui (ou nao sendo publicadas -- os compose
+#                   ja fazem bind em 127.0.0.1, isto e a segunda barreira).
+#
+# Roda DEPOIS de tudo que sobe container: o Docker reescreve as proprias
+# chains ao subir, e a ordem evita ter que reconciliar.
+- hosts: all
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+
+    - name: Firewall | Instalar iptables-persistent sem prompt do debconf
+      ansible.builtin.debconf:
+        name: iptables-persistent
+        question: "{{ item }}"
+        vtype: boolean
+        value: "false"
+      loop:
+        - iptables-persistent/autosave_v4
+        - iptables-persistent/autosave_v6
+
+    - name: Firewall | Instalar iptables-persistent
+      ansible.builtin.apt:
+        name: iptables-persistent
+        state: present
+        update_cache: yes
+
+    - name: Firewall | Garantir /etc/iptables
+      ansible.builtin.file:
+        path: /etc/iptables
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # As bridges do Docker nao tem nome fixo (br-<hash>), entao a lista e
+    # descoberta na hora em vez de ficar hardcoded.
+    - name: Firewall | Descobrir as bridges do Docker
+      ansible.builtin.shell: |
+        ls -1 /sys/class/net | grep -E '^(docker0|br-)' || true
+      register: docker_bridges
+      changed_when: false
+
+    - name: Firewall | Escrever /etc/iptables/rules.v4
+      ansible.builtin.copy:
+        dest: /etc/iptables/rules.v4
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          *filter
+          :INPUT DROP [0:0]
+          :FORWARD DROP [0:0]
+          :OUTPUT ACCEPT [0:0]
+          :DOCKER-USER - [0:0]
+
+          # --- INPUT: servicos do proprio host ---
+          -A INPUT -i lo -j ACCEPT
+          -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+          -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+          -A INPUT -p udp --sport 67 --dport 68 -j ACCEPT
+          -A INPUT -p tcp -m multiport --dports {{ fw_allowed_tcp | join(',') }} -j ACCEPT
+
+          # --- API do Docker (2375): so das bridges do proprio Docker ---
+          # Sem TLS/auth: quem alcanca a porta tem root na VM. O consumidor
+          # legitimo e um container falando com host.docker.internal, que
+          # resolve para o gateway da bridge -- por isso a origem e 172.16/12.
+          {% for br in docker_bridges.stdout_lines %}
+          -A INPUT -i {{ br }} -s {{ docker_net_cidr }} -p tcp --dport 2375 -j ACCEPT
+          {% endfor %}
+          -A INPUT -p tcp --dport 2375 -j DROP
+
+          # --- DOCKER-USER: nenhuma conexao NOVA da rede externa alcanca
+          # container. O RETURN de ESTABLISHED preserva o trafego que o
+          # proprio container iniciou (pull de imagem, apt, etc).
+          -A DOCKER-USER -i {{ ext_if }} -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+          -A DOCKER-USER -i {{ ext_if }} -j DROP
+          -A DOCKER-USER -j RETURN
+          COMMIT
+      register: fw_rules
+
+    # iptables-restore --noflush: o arquivo traz so INPUT/FORWARD/OUTPUT e
+    # DOCKER-USER. Sem --noflush o restore zeraria as chains DOCKER*, que sao
+    # do daemon, e derrubaria a rede dos containers ate o proximo restart.
+    - name: Firewall | Aplicar as regras
+      ansible.builtin.shell: |
+        iptables -F INPUT
+        iptables -F DOCKER-USER 2>/dev/null || true
+        iptables-restore --noflush < /etc/iptables/rules.v4
+      when: fw_rules.changed
+
+    - name: Firewall | Habilitar netfilter-persistent no boot
+      ansible.builtin.systemd:
+        name: netfilter-persistent
+        enabled: yes
+        state: started
+
+    # Conferencia: a 2375 tem que responder no loopback (o daemon esta de pe)
+    # e as portas que deviam sair do ar nao podem mais atender na externa.
+    - name: Firewall | Conferir que a 2375 responde localmente
+      ansible.builtin.uri:
+        url: http://127.0.0.1:2375/version
+        status_code: 200
+      changed_when: false
+
+    - name: Firewall | Conferir que o Squid nega a API do Docker
+      ansible.builtin.shell: |
+        curl -s -o /dev/null -w '%{http_code}' -m 10 \
+          -x http://127.0.0.1:{{ squid_port }} \
+          http://{{ gitlab_host }}:2375/version
+      register: squid_docker_check
+      changed_when: false
+      failed_when: squid_docker_check.stdout != '403'

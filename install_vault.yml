@@ -34,6 +34,7 @@
                   proxy_ssl_verify      off;
                   proxy_set_header      Host                $host;
                   proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      SC-Connecting-IP    $remote_addr;
                   proxy_set_header      X-Forwarded-For     $remote_addr;
                   proxy_set_header      X-Forwarded-Proto   $scheme;
                   proxy_pass http://127.0.0.1:8200;
@@ -165,7 +166,7 @@
               restart: always
 
               ports:
-                - "8200:8200"
+                - "127.0.0.1:8200:8200"
 
               environment:
                 TZ: America/Sao_Paulo

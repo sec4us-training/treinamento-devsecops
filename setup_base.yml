@@ -384,6 +384,21 @@
           http_access deny CONNECT !SSL_ports
           http_access deny localhost manager
           http_access deny manager
+
+          # --- API do Docker: nunca atraves do proxy -------------------------
+          # Sem isto, `http://<qualquer>.sec4us.com.br:2375/` passa pelo
+          # `allow devsecops` (o dstdomain casa e a 2375 cai no Safe_ports
+          # 1025-65535) e entrega a API do daemon -- root na VM -- mesmo com a
+          # porta fechada no firewall. Vale para GET e para CONNECT.
+          acl docker_api port 2375 2376
+          http_access deny docker_api
+
+          # --- SC-Connecting-IP ---------------------------------------------
+          # Quem escreve o header e o Squid, com o IP real do cliente (%>a).
+          # O `deny all` descarta o que o cliente mandar, entao nao da para
+          # forjar a origem; o Nginx confia no header so vindo de 127.0.0.1.
+          request_header_access SC-Connecting-IP deny all
+          request_header_add SC-Connecting-IP "%>a" all
           include /etc/squid/conf.d/*
 
           #Auth
@@ -396,7 +411,7 @@
           http_access allow devsecops
           http_access deny all
 
-          http_port 48284
+          http_port {{ squid_port }}
           coredump_dir /var/spool/squid
           refresh_pattern ^ftp:     1440    20% 10080
           refresh_pattern ^gopher:  1440    0%  1440

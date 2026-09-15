@@ -59,6 +59,7 @@
                   proxy_ssl_verify      off;
                   proxy_set_header      Host                $host;
                   proxy_set_header      X-Real-IP           $remote_addr;
+                  proxy_set_header      SC-Connecting-IP    $remote_addr;
                   proxy_set_header      X-Forwarded-For     $remote_addr;
                   proxy_set_header      X-Forwarded-Proto   $scheme;
 
@@ -254,8 +255,8 @@
                 - "{{registry_host}}:host-gateway"
 
               ports:
-                - "8080:8080"   # UI
-                - "50000:50000" # JNLP agents
+                - "127.0.0.1:8080:8080"   # UI
+                - "127.0.0.1:50000:50000" # JNLP agents
 
               environment:
                 - JAVA_OPTS=-Djenkins.install.runSetupWizard=false

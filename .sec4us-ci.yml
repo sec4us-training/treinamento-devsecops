@@ -802,6 +802,25 @@ credentials:
       ansible:
         name: ci_flag.yml
 
+# --- firewall ----------------------------------------------------------------
+# Ultimo passo antes do snapshot, e de proposito: o Docker reescreve as proprias
+# chains toda vez que sobe um container, entao o firewall so fica estavel depois
+# que o laboratorio inteiro esta de pe.
+#
+# Deixa exposto para a rede dos alunos apenas 22, 80, 443 e a porta do Squid.
+# Fecha a API do Docker (2375), que sem TLS/auth da root na VM e entregaria
+# todas as flags deste laboratorio de uma vez.
+firewall:
+  stage: finish
+  needs: credentials
+  runs-on: devsecops
+  retries: 1
+  force: true
+  steps:
+    - name: Regras de firewall do laboratorio
+      ansible:
+        name: setup_firewall.yml
+
 # --- snapshot final ----------------------------------------------------------
 # Último job do pipeline: com o laboratório inteiro de pé, congela o estado das
 # duas VMs.
@@ -814,7 +833,7 @@ credentials:
 # tira outro.
 snapshot:
   stage: snapshot
-  needs: credentials
+  needs: firewall
   runs-on:
     - devsecops
     - runner2
