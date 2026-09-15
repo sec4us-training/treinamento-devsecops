@@ -1,0 +1,68 @@
+---
+# Fechamento do acesso à máquina Windows — o par do `ci_creds.yml` do Linux.
+#
+# A senha do Administrator desta VM é a que o motor de deploy gerou, e ela
+# aparece na tela de credenciais da máquina, no painel do laboratório. Para quem
+# está fazendo o exercício isso é um atalho: entrar por RDP ou WinRM como
+# Administrator e ler o `C:\secrets\flag.txt` pula toda a cadeia que leva até o
+# agente do Jenkins.
+#
+# Este playbook troca essa senha por 40 caracteres aleatórios e NÃO publica o
+# valor em lugar nenhum. Não é uma credencial a entregar, é uma porta a fechar.
+#
+# A senha é sorteada A CADA EXECUÇÃO: nada depende dela, então não há o que
+# invalidar ao girá-la de novo.
+#
+# ATENÇÃO — ESTE PLAYBOOK CORTA O PRÓPRIO CAMINHO DE VOLTA, e aqui não há rede
+# de segurança como no Linux, onde o root continua entrando pela chave SSH. Uma
+# vez trocada, a senha não existe mais em lugar nenhum: para voltar a
+# administrar esta VM é preciso redefinir a senha pelo console do vSphere.
+#
+# Por isso ele é o ÚLTIMO job que fala com a máquina, e a troca é a ÚLTIMA task
+# do play. Os jobs seguintes não usam WinRM: `snapshot` é API do vSphere e
+# `shutdown` desliga pelo VMware Tools.
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars:
+    ansible_connect_timeout: 60
+    ansible_command_timeout: 120
+
+    admin_user: Administrator
+    admin_password_length: 40
+    # O conjunto de especiais pedido — substitui o padrão do lookup.
+    admin_password_special: '!@#&'
+
+  tasks:
+
+    - name: Creds | Aguardar a conexão
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 5
+        connect_timeout: 10
+
+    - name: Creds | Sortear a senha do Administrator
+      ansible.builtin.set_fact:
+        admin_password: "{{ lookup('community.general.random_string',
+                                   length=admin_password_length,
+                                   upper=True, lower=True, numbers=True,
+                                   special=True,
+                                   override_special=admin_password_special,
+                                   min_lower=1, min_upper=1,
+                                   min_numeric=1, min_special=1) }}"
+      no_log: true
+
+    # ÚLTIMA TASK COM WINRM. A sessão atual já está autenticada e sobrevive até
+    # devolver o resultado; a próxima conexão é que não abre mais.
+    #
+    # O módulo recebe a senha como argumento, e não por linha de comando: os
+    # caracteres especiais não passam por nenhum shell no caminho.
+    - name: Creds | Trocar a senha do Administrator
+      ansible.windows.win_user:
+        name: "{{ admin_user }}"
+        password: "{{ admin_password }}"
+        update_password: always
+        password_never_expires: true
+      no_log: true

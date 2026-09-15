@@ -838,6 +838,18 @@ firewall-win:
       ansible:
         name: windows/firewall.yml
 
+    # ULTIMO PASSO QUE FALA COM O RUNNER. Gira a senha do Administrator e
+    # descarta o valor: a senha do motor de deploy aparece na tela de
+    # credenciais da maquina, e com ela o aluno entraria por RDP/WinRM e leria o
+    # C:\secrets\flag.txt sem resolver nada da cadeia.
+    #
+    # Aqui nao ha o equivalente a chave SSH do Linux -- depois desta troca, so o
+    # console do vSphere reabre a maquina. Os jobs seguintes nao precisam de
+    # WinRM: `snapshot` e API do vSphere e `shutdown` usa o VMware Tools.
+    - name: Girar a senha do Administrator do runner
+      ansible:
+        name: windows/creds.yml
+
 # --- snapshot final ----------------------------------------------------------
 # Último job do pipeline: com o laboratório inteiro de pé, congela o estado das
 # duas VMs.
