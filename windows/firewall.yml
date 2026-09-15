@@ -111,34 +111,45 @@
       changed_when: true
 
     # O DefaultInboundAction=Block so decide quando NENHUMA regra de permissao
-    # casa. As regras internas de RDP vem habilitadas com escopo `Any/Any`, e
-    # como basta uma regra Allow casar, elas furam a excecao acima: medido nesta
-    # maquina, a 3389 respondia de 192.168.30.249 (fora de `fw_allowed_ips`).
+    # casa -- e basta UMA regra Allow casar para a conexao entrar. O Windows vem
+    # com dezenas de regras de entrada habilitadas com escopo remoto `Any`, e
+    # cada uma delas fura a excecao criada acima.
     #
-    # Desabilitar em vez de reescopar: RDP nao e caminho de ninguem aqui -- o
-    # Ansible entra por WinRM e o agente do Jenkins sai sozinho. Quem precisar
-    # de RDP passa pela regra de administracao, que ja cobre a 3389.
-    - name: Firewall | Desabilitar as regras internas de RDP com escopo aberto
+    # Foi assim que a 3389 apareceu respondendo de 192.168.30.249, endereco fora
+    # de `fw_allowed_ips`: as regras internas de RDP estavam ligadas em Any/Any.
+    # O RDP era so o caso medido; a "Windows Remote Management (HTTP-In)" e as
+    # de compartilhamento de arquivo tem a mesma forma.
+    #
+    # Por isso a regra aqui e pela FORMA, e nao por uma lista de nomes -- lista
+    # de nomes so fecha o que alguem lembrou de olhar. Fica valendo: toda regra
+    # de entrada, Allow, habilitada e com origem Any e desabilitada, menos a
+    # nossa. Quem precisar de RDP, SMB ou WinRM passa pela regra de
+    # administracao, que ja cobre essas portas vindas de `fw_allowed_ips`.
+    - name: Firewall | Desabilitar as regras de entrada com origem aberta
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
-        $alvo = @(
-          'Remote Desktop - User Mode (TCP-In)',
-          'Remote Desktop - User Mode (UDP-In)',
-          'Remote Desktop'
-        )
-        foreach ($n in $alvo) {
-          $r = Get-NetFirewallRule -DisplayName $n -ErrorAction SilentlyContinue
-          if ($r) {
-            $r | Where-Object { $_.Enabled -eq 'True' } | Disable-NetFirewallRule
-            "desabilitada: $n"
+
+        $minha = '{{ fw_in_rule }}'
+        $abertas = Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True |
+                     Where-Object { $_.DisplayName -ne $minha }
+
+        foreach ($r in $abertas) {
+          # `-eq 'Any'` sobre um array devolve os elementos que casam, entao uma
+          # regra que tenha Any ENTRE outras origens tambem cai aqui -- que e o
+          # certo: ela continua aberta para qualquer um.
+          $origem = ($r | Get-NetFirewallAddressFilter).RemoteAddress
+          if ($origem -eq 'Any') {
+            Disable-NetFirewallRule -InputObject $r
+            "desabilitada: $($r.DisplayName)"
           }
         }
-      register: fw_rdp_off
-      changed_when: "'desabilitada:' in fw_rdp_off.stdout"
+      register: fw_open_off
+      changed_when: "'desabilitada:' in fw_open_off.stdout"
 
-    - name: Firewall | Regras de RDP desabilitadas
+    - name: Firewall | Regras de entrada desabilitadas
       ansible.builtin.debug:
-        msg: "{{ fw_rdp_off.stdout_lines | select | list }}"
+        msg: >-
+          {{ (fw_open_off.stdout_lines | select | list) | default(['nenhuma'], true) }}
 
     - name: Firewall | Conferir que as duas regras ficaram gravadas
       ansible.windows.win_shell: |
