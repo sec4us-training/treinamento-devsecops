@@ -164,15 +164,16 @@ de um container deve ser loopback; o Go isenta loopback sempre, sem depender de
 
 ## O par de chaves do laboratório
 
-O `deploy.sh` gera um par de chaves, autoriza a pública no `secops` e no `root` e
-guarda a privada no Vault (`secret/devops-server/ssh`) — é esse o caminho da
-prática: achar o segredo no Vault e virar root no servidor.
+O `deploy.sh` gera um par de chaves e autoriza a pública no `secops` e no `root`.
+A privada **não vai para o Vault**: o `install_vault.yml` guardava uma cópia em
+`secret/devops-server/ssh` e esse trecho foi removido dos dois fluxos.
 
 No pipeline isso é o job `prepare` (`ci_prepare.yml`). O detalhe que obriga o
 artefato: o orquestrador **substitui o diretório do repositório a cada
 sincronização** e **pula os passos já concluídos** numa retomada. Um par gerado
-de novo depois do `install_vault` deixaria o segredo do Vault sem acesso nenhum.
-Por isso o job faz, nesta ordem:
+de novo depois do `setup_base` deixaria a privada do artefato sem correspondência
+com o `authorized_keys` já instalado — ou seja, sem acesso nenhum. Por isso o job
+faz, nesta ordem:
 
 1. `download-artifact: ssh-key` (com `ignore_error`, porque na primeira execução
    não há nada guardado);

@@ -6,10 +6,9 @@
 # é o orquestrador, e o que é dele ganha `delegate_to: localhost`.
 #
 #   1. o par de chaves SSH do laboratório (`ssh_key.pem` / `ssh_key.pub`), que o
-#      setup_base.yml autoriza para o {{ local_username }} e o install_vault.yml
-#      guarda no Vault (secret/devops-server/ssh);
-#   2. a mesma chave pública no authorized_keys do root — é ela que transforma o
-#      segredo do Vault em acesso root, que é o ponto da prática;
+#      setup_base.yml autoriza para o {{ local_username }};
+#   2. a mesma chave pública no authorized_keys do root — é por ela que se entra
+#      como root no servidor;
 #   3. o `pip_extra_args` do vars.yml conforme o python da imagem (PEP 668).
 #
 # O vars.yml NÃO é regerado: neste repositório ele é versionado e continua sendo

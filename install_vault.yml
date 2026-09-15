@@ -398,22 +398,4 @@
         status_code: [200, 204]
       no_log: true
 
-    - name: Read SSH key from controller
-      ansible.builtin.set_fact:
-        ssh_key_pem: "{{ lookup('file', playbook_dir ~ '/ssh_key.pem') }}"
-      no_log: true
-
-    - name: Vault | Store server SSH key
-      ansible.builtin.uri:
-        url: "https://{{ vault_host }}/v1/secret/devops-server/ssh"
-        method: POST
-        headers:
-          X-Vault-Token: "{{ vault_token }}"
-        body_format: json
-        body:
-          username: "root"
-          private_key: "{{ ssh_key_pem }}"
-        validate_certs: false
-        status_code: [200, 204]
-      no_log: true
 
