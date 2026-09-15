@@ -142,11 +142,30 @@
         status_code: 200
       changed_when: false
 
+    # `--noproxy ""` NAO e enfeite: o curl le a NO_PROXY do ambiente e, para os
+    # `.labs.sec4us.com.br` que estao la, IGNORA o `--proxy` e vai direto ao
+    # destino. Sem isso esta task nao testava o Squid coisa nenhuma -- ela batia
+    # diretamente na API do Docker e recebia 200, reprovando uma ACL que estava
+    # correta. A lista vazia desliga todas as excecoes.
     - name: Firewall | Conferir que o Squid nega a API do Docker
       ansible.builtin.shell: |
         curl -s -o /dev/null -w '%{http_code}' -m 10 \
-          -x http://127.0.0.1:{{ squid_port }} \
+          --noproxy "" \
+          --proxy http://127.0.0.1:{{ squid_port }} \
           http://{{ gitlab_host }}:2375/version
       register: squid_docker_check
       changed_when: false
       failed_when: squid_docker_check.stdout != '403'
+
+    # O contraste: um destino legitimo tem que CONTINUAR passando. Sem este
+    # segundo teste, um Squid fora do ar (ou negando tudo) passaria pelo de cima
+    # sem ninguem perceber.
+    - name: Firewall | Conferir que o Squid segue servindo o laboratorio
+      ansible.builtin.shell: |
+        curl -s -o /dev/null -w '%{http_code}' -m 20 \
+          --noproxy "" \
+          --proxy http://127.0.0.1:{{ squid_port }} \
+          https://{{ gitlab_host }}/
+      register: squid_lab_check
+      changed_when: false
+      failed_when: squid_lab_check.stdout is not match('^[23]')
