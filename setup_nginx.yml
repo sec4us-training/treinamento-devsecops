@@ -23,6 +23,22 @@
   shell: |
     cat /etc/nginx/nginx.conf | grep -E '\buser\b' | sed 's/user//g;s/\;//g' | tr -d ' ' > /tmp/nginxuser.txt
 
+# O mesmo valor do /tmp/nginxuser.txt acima, agora como fato do ansible: os
+# passos que criam o CERT_HOME e copiam a CA usam este usuário como dono, para o
+# worker do NGINX conseguir ler o que serve.
+#
+# O `or 'root'` é rede de segurança: se o grep não achar a diretiva `user` o
+# arquivo sai vazio, e um `owner: ""` derrubaria a task. Nesse caso fica o dono
+# de antes.
+- name: NGINX | Ler o usuário do NGINX
+  ansible.builtin.slurp:
+    src: /tmp/nginxuser.txt
+  register: nginx_user_raw
+
+- name: NGINX | Guardar o usuário do NGINX
+  ansible.builtin.set_fact:
+    nginx_user: "{{ (nginx_user_raw.content | b64decode | trim) or 'root' }}"
+
 - name: NGINX | Configuring NGINX
   copy:
     dest: "/etc/nginx/nginx.conf"
@@ -88,9 +104,13 @@
       server {
           listen 80 ;
           server_name _;
+          
+          root /dev/null;
+          index index.html index.htm;
+          try_files $uri $uri/ $uri/404 =404;
 
-          location / {
-             return 403;
+          location /root-ca.cer {
+            root {{CERT_HOME}};
           }
 
           error_page 403 /403.txt;
@@ -140,3 +160,20 @@
     mkdir -p /etc/docker/certs.d/registry.labs.sec4us.com.br
     rsync -av /etc/nginx/certs/root-ca.pem /etc/docker/certs.d/registry.labs.sec4us.com.br/ca.crt
 
+- name: NGINX | Create directories
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ nginx_user }}"
+    group: "{{ nginx_user }}"
+    mode: 0777
+  with_items:
+      - { path: "{{ CERT_HOME }}" }
+
+- name: NGINX | Copy CA root cert
+  copy:
+    src: "/etc/nginx/certs/root-ca.pem"
+    remote_src: true
+    dest: "{{ CERT_HOME }}/root-ca.cer"
+    owner: "{{ nginx_user }}"
+    group: "{{ nginx_user }}"
