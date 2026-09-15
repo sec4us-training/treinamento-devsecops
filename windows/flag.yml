@@ -67,6 +67,35 @@
       when: not flag_stat.stat.exists
       no_log: true
 
+    # A flag nasce herdando a ACL de C:\, que dá leitura a BUILTIN\Users --
+    # medido nesta máquina. Ou seja, qualquer conta local lê o arquivo sem
+    # precisar ser administrador. O agente do Jenkins roda como SYSTEM
+    # (jenkins_runner.yml), então SYSTEM + Administrators é tudo o que o
+    # laboratório precisa; `Users` só encurta o exercício.
+    - name: Flags | Restringir a ACL a SYSTEM e Administrators
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $p = '{{ flag_path }}'
+        $acl = Get-Acl $p
+        # Quebra a herança copiando as ACEs atuais; sem isso o ACE de Users
+        # volta de C:\ na próxima vez que a herança for reavaliada.
+        if (-not $acl.AreAccessRulesProtected) {
+          $acl.SetAccessRuleProtection($true, $true)
+          Set-Acl $p $acl
+          $acl = Get-Acl $p
+        }
+        $removidos = 0
+        $acl.Access | Where-Object { $_.IdentityReference -like '*\Users' } | ForEach-Object {
+          $acl.RemoveAccessRule($_) | Out-Null
+          $removidos++
+        }
+        if ($removidos -gt 0) {
+          Set-Acl $p $acl
+          "removido BUILTIN\Users da ACL ($removidos ACE)"
+        }
+      register: flag_acl
+      changed_when: "'removido' in flag_acl.stdout"
+
     # Sem `no_log`: é da LINHA DE LOG deste passo que o orquestrador extrai a
     # credencial. Quem lê o log da execução vê a flag.
     - name: Flgs | Windows Flag

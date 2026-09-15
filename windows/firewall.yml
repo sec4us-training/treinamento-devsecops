@@ -110,6 +110,36 @@
           -Enabled True | Out-Null
       changed_when: true
 
+    # O DefaultInboundAction=Block so decide quando NENHUMA regra de permissao
+    # casa. As regras internas de RDP vem habilitadas com escopo `Any/Any`, e
+    # como basta uma regra Allow casar, elas furam a excecao acima: medido nesta
+    # maquina, a 3389 respondia de 192.168.30.249 (fora de `fw_allowed_ips`).
+    #
+    # Desabilitar em vez de reescopar: RDP nao e caminho de ninguem aqui -- o
+    # Ansible entra por WinRM e o agente do Jenkins sai sozinho. Quem precisar
+    # de RDP passa pela regra de administracao, que ja cobre a 3389.
+    - name: Firewall | Desabilitar as regras internas de RDP com escopo aberto
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        $alvo = @(
+          'Remote Desktop - User Mode (TCP-In)',
+          'Remote Desktop - User Mode (UDP-In)',
+          'Remote Desktop'
+        )
+        foreach ($n in $alvo) {
+          $r = Get-NetFirewallRule -DisplayName $n -ErrorAction SilentlyContinue
+          if ($r) {
+            $r | Where-Object { $_.Enabled -eq 'True' } | Disable-NetFirewallRule
+            "desabilitada: $n"
+          }
+        }
+      register: fw_rdp_off
+      changed_when: "'desabilitada:' in fw_rdp_off.stdout"
+
+    - name: Firewall | Regras de RDP desabilitadas
+      ansible.builtin.debug:
+        msg: "{{ fw_rdp_off.stdout_lines | select | list }}"
+
     - name: Firewall | Conferir que as duas regras ficaram gravadas
       ansible.windows.win_shell: |
         $ErrorActionPreference = "Stop"
