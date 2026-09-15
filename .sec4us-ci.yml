@@ -821,6 +821,23 @@ firewall:
       ansible:
         name: setup_firewall.yml
 
+# O mesmo fechamento na maquina Windows, e ele e o ULTIMO job que fala com ela:
+# nada entra, exceto as portas de administracao (445, 3389 e WinRM) vindas dos
+# enderecos de `fw_allowed_ips`; e a unica saida e a do agente para o Jenkins.
+#
+# Os dois jobs seguintes nao usam WinRM -- `snapshot` e API do vSphere e
+# `shutdown` desliga pelo VMware Tools --, entao a ordem aqui e segura.
+firewall-win:
+  stage: finish
+  needs: firewall
+  runs-on: runner2
+  retries: 1
+  force: true
+  steps:
+    - name: Regras de firewall do runner Windows
+      ansible:
+        name: windows/firewall.yml
+
 # --- snapshot final ----------------------------------------------------------
 # Último job do pipeline: com o laboratório inteiro de pé, congela o estado das
 # duas VMs.

@@ -1,0 +1,158 @@
+---
+# Firewall da máquina Windows — o fechamento do runner.
+#
+# Regra final, nas duas direções, para os três perfis:
+#
+#   ENTRADA  bloqueada, com UMA exceção: as portas de administração
+#            ({{ fw_admin_tcp }}) vindas apenas dos endereços de
+#            `fw_allowed_ips` (vars.yml). De qualquer outra origem, nada entra.
+#   SAÍDA    bloqueada, com UMA exceção: TCP 443 para o servidor do laboratório
+#            — o caminho do agente até o Jenkins.
+#
+# Por que 443 e só 443: o agente é lançado com `-webSocket`
+# (windows/jenkins_runner.yml), então ele fala com o Jenkins pelo mesmo HTTPS
+# que o Nginx publica — a porta 50000 (JNLP clássico) não é usada, e do lado
+# Linux ela nem escuta mais fora do loopback. Como Vault, GitLab, JFrog, Sonar,
+# registry e Web01 moram nesse mesmo endereço, a regra cobre o que um build
+# precisa sem abrir nada além do servidor.
+#
+# A ORDEM DAS TASKS É DELIBERADA: as duas exceções são criadas ANTES de o padrão
+# virar Block. Assim não há um instante em que o agente fique sem caminho até o
+# Jenkins, nem em que a administração se perca.
+#
+# Se `fw_allowed_ips` não cobrir o endereço de onde o orquestrador fala com esta
+# máquina, o WinRM se fecha e o pipeline não a alcança mais — a última task
+# confere exatamente isso, reconectando depois do bloqueio.
+#
+# Para reabrir pelo console do vSphere:
+#   Set-NetFirewallProfile -All -DefaultInboundAction Allow
+#
+# Só existe no fluxo do pipeline: o `deploy.sh` não conhece máquina Windows.
+- hosts: all
+  gather_facts: false
+
+  vars_files:
+    # O vars.yml da raiz, mesma fonte dos playbooks Linux (é de lá que saem o
+    # `fw_allowed_ips` e o `fw_admin_tcp`). Caminho explícito porque este
+    # playbook vive em ./windows.
+    - "{{ playbook_dir }}/../vars.yml"
+
+  vars:
+    ansible_connect_timeout: 60
+    ansible_command_timeout: 120
+
+    # O IP FIXO declarado em `machines:`, igual ao windows/baseline.yml — é para
+    # ele que o hosts do Windows aponta todos os `*.labs.sec4us.com.br`.
+    devsecops_ip: "{{ lab_machines.devsecops.static_ip | default(lab_machines.devsecops.ip, true) }}"
+
+    fw_out_rule: "Lab Sec4US - saida do agente para o Jenkins"
+    fw_in_rule: "Lab Sec4US - administracao"
+    fw_jenkins_port: 443
+
+  tasks:
+
+    - name: Firewall | Aguardar a conexão
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 5
+        connect_timeout: 10
+
+    - name: Firewall | A lista de endereços de administração não pode estar vazia
+      ansible.builtin.assert:
+        that:
+          - fw_allowed_ips | default([], true) | length > 0
+          - fw_admin_tcp | default([], true) | length > 0
+        success_msg: >-
+          Administração liberada de {{ fw_allowed_ips | join(', ') }}
+          nas portas {{ fw_admin_tcp | join(', ') }}.
+        fail_msg: >-
+          `fw_allowed_ips` e `fw_admin_tcp` precisam estar definidos no vars.yml.
+          Sem eles esta máquina ficaria sem nenhuma porta de administração — e
+          não há como reabri-la a não ser pelo console do vSphere.
+
+    - name: Firewall | Liberar a saída do agente para o Jenkins
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+
+        Get-NetFirewallRule -DisplayName '{{ fw_out_rule }}' -ErrorAction SilentlyContinue |
+          Remove-NetFirewallRule
+
+        New-NetFirewallRule `
+          -DisplayName '{{ fw_out_rule }}' `
+          -Description 'Agente do Jenkins (webSocket) para o servidor do laboratorio' `
+          -Direction Outbound `
+          -Action Allow `
+          -Protocol TCP `
+          -RemoteAddress '{{ devsecops_ip }}' `
+          -RemotePort {{ fw_jenkins_port }} `
+          -Profile Any `
+          -Enabled True | Out-Null
+      changed_when: true
+
+    # `-LocalPort` e não `-RemotePort`: numa regra de ENTRADA a porta que
+    # interessa é a desta máquina, a que está escutando.
+    - name: Firewall | Liberar a administração para os endereços permitidos
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+
+        Get-NetFirewallRule -DisplayName '{{ fw_in_rule }}' -ErrorAction SilentlyContinue |
+          Remove-NetFirewallRule
+
+        New-NetFirewallRule `
+          -DisplayName '{{ fw_in_rule }}' `
+          -Description 'SMB, RDP e WinRM a partir da rede de administracao' `
+          -Direction Inbound `
+          -Action Allow `
+          -Protocol TCP `
+          -LocalPort {{ fw_admin_tcp | join(',') }} `
+          -RemoteAddress '{{ fw_allowed_ips | join("','") }}' `
+          -Profile Any `
+          -Enabled True | Out-Null
+      changed_when: true
+
+    - name: Firewall | Conferir que as duas regras ficaram gravadas
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        foreach ($n in @('{{ fw_out_rule }}', '{{ fw_in_rule }}')) {
+          $r = Get-NetFirewallRule -DisplayName $n
+          $a = $r | Get-NetFirewallAddressFilter
+          $p = $r | Get-NetFirewallPortFilter
+          "{0} | {1} | {2} | remoto={3} | local={4} | portas L={5} R={6}" -f `
+            $r.Direction, $r.Action, $r.Enabled, `
+            ($a.RemoteAddress -join ' '), ($a.LocalAddress -join ' '), `
+            ($p.LocalPort -join ' '), ($p.RemotePort -join ' ')
+        }
+      register: fw_rules_check
+      changed_when: false
+
+    - name: Firewall | As regras de exceção
+      ansible.builtin.debug:
+        msg: "{{ fw_rules_check.stdout_lines | select | list }}"
+
+    # Só agora o padrão vira Block. O firewall é stateful, então a resposta
+    # desta própria chamada volta pela sessão que já estava aberta.
+    - name: Firewall | Bloquear tudo o mais, nas duas direções
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = "Stop"
+        Set-NetFirewallProfile -All `
+          -Enabled True `
+          -DefaultInboundAction Block `
+          -DefaultOutboundAction Block
+        Get-NetFirewallProfile |
+          Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction |
+          Format-Table -AutoSize | Out-String
+      register: fw_profiles
+      changed_when: true
+
+    - name: Firewall | Perfis do firewall
+      ansible.builtin.debug:
+        msg: "{{ fw_profiles.stdout_lines | select | list }}"
+
+    # A prova real: uma conexão NOVA, depois do bloqueio. Se a exceção de
+    # administração não cobrir o endereço do orquestrador, é aqui que se
+    # descobre — e não na próxima execução do pipeline.
+    - name: Firewall | Reconectar para provar que a administração continua de pé
+      ansible.builtin.wait_for_connection:
+        timeout: 180
+        sleep: 5
+        connect_timeout: 15

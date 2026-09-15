@@ -305,13 +305,72 @@
     - name: Base | Change SSH PasswordAuthentication to No
       lineinfile:
         path: /etc/ssh/sshd_config
-        insertafter: '^#?PasswordAuthentication '
+        regexp: '^#?\s*PasswordAuthentication\s'
         line: 'PasswordAuthentication no'
+
+    # A linha acima, sozinha, NÃO desliga nada nesta imagem.
+    #
+    # O /etc/ssh/sshd_config traz `Include /etc/ssh/sshd_config.d/*.conf` já na
+    # linha 12, e a imagem do Ubuntu vem com um `50-cloud-init.conf` dizendo
+    # `PasswordAuthentication yes`. No sshd vale o PRIMEIRO valor obtido, então o
+    # drop-in — incluído lá no topo — vence a linha do arquivo principal. Nesta
+    # VM o `sshd -T` respondia `passwordauthentication yes` com o
+    # `PasswordAuthentication no` escrito no arquivo.
+    #
+    # A correção é entrar no mesmo diretório com um nome que ordene ANTES
+    # (00 < 50): aí o primeiro valor passa a ser este.
+    - name: Base | SSH só por chave (drop-in que vence o do cloud-init)
+      copy:
+        dest: /etc/ssh/sshd_config.d/00-lab-hardening.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Sec4US — autenticação SOMENTE por chave.
+          # Ordena antes do 50-cloud-init.conf de propósito: no sshd o primeiro
+          # valor obtido é o que vale.
+          PasswordAuthentication no
+          # Sem isto o PAM continua pedindo senha pelo keyboard-interactive e o
+          # "sem senha" não vale nada.
+          KbdInteractiveAuthentication no
+          PermitEmptyPasswords no
+          PubkeyAuthentication yes
+          # root entra, mas só com a chave que o deploy instala no
+          # authorized_keys.
+          PermitRootLogin prohibit-password
+
+    # Antes de reiniciar: configuração inválida aqui deixaria o sshd fora do ar,
+    # e o deploy inteiro fala com esta máquina por SSH.
+    - name: Base | Validar a configuração do sshd
+      ansible.builtin.command: sshd -t
+      changed_when: false
 
     - name: Base | Restart SSH service
       service:
         name: sshd
         state: restarted
+
+    # `sshd -T` mostra o que o daemon REALMENTE aplica, com os includes já
+    # resolvidos — é o único jeito de saber que a senha caiu mesmo.
+    - name: Base | Ler a configuração efetiva do sshd
+      ansible.builtin.shell: |
+        sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitemptypasswords|pubkeyauthentication|permitrootlogin) '
+      register: sshd_effective
+      changed_when: false
+
+    - name: Base | Exigir autenticação só por chave
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in sshd_effective.stdout"
+          - "'kbdinteractiveauthentication no' in sshd_effective.stdout"
+          - "'permitemptypasswords no' in sshd_effective.stdout"
+          - "'pubkeyauthentication yes' in sshd_effective.stdout"
+        success_msg: "SSH aceita apenas chave."
+        fail_msg: >-
+          O sshd ainda aceita senha depois do hardening. O que ele aplica:
+          {{ sshd_effective.stdout_lines | join(' | ') }}.
+          Procure outro arquivo em /etc/ssh/sshd_config.d/ que ordene antes do
+          00-lab-hardening.conf.
 
     - name: Base | Disable auto update
       copy:

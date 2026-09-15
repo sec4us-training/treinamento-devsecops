@@ -48,3 +48,20 @@ fw_allowed_tcp:
 # Faixa das redes internas do Docker: a unica origem autorizada a falar com a
 # API do daemon (2375).
 docker_net_cidr: 172.16.0.0/12
+
+# --- Administração da máquina Windows ----------------------------------------
+# O runner Windows fecha a entrada por completo (windows/firewall.yml). Estes
+# são os ÚNICOS endereços que continuam entrando, e só nas portas abaixo.
+#
+# Cuidado ao editar: se esta lista deixar de cobrir o endereço de onde o
+# orquestrador fala com a máquina, o WinRM se fecha e só o console do vSphere
+# reabre. O playbook confere isso reconectando depois de aplicar o bloqueio.
+fw_allowed_ips:
+  - 192.168.30.1
+  - 10.255.0.0/16
+
+fw_admin_tcp:
+  - 445    # SMB
+  - 3389   # RDP
+  - 5985   # WinRM (HTTP)
+  - 5986   # WinRM (HTTPS)
